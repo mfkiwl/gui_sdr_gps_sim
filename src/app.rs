@@ -1,4 +1,4 @@
-use egui::ScrollArea;
+use egui::{ScrollArea, Slider};
 use geo::{Distance, Geodesic, InterpolatePoint, Point};
 use reqwest;
 use serde::{Deserialize, Serialize};
@@ -61,6 +61,7 @@ pub struct TemplateApp {
     // Example stuff:
     current_mode: AppPage, // To control which view is shown
     label: String,
+    status: String,
     #[serde(skip)] // This how you opt-out of serialization of a field
     value: f32,
     #[serde(skip)]
@@ -73,6 +74,8 @@ pub struct TemplateApp {
     end_lon: String,
     #[serde(skip)]
     end_lat: String,
+    #[serde(skip)]
+    velocity: f64,
 }
 
 // --- Manually Implement `Default` (starting values) ---
@@ -92,6 +95,8 @@ impl Default for TemplateApp {
             via_points: vec![String::new()],
             end_lat: "latitude".to_string(),
             end_lon: "Longitude".to_string(),
+            velocity: 1.0, // Default velocity in m/s
+            status: String::from("Ready"),
         }
     }
 }
@@ -284,12 +289,64 @@ impl eframe::App for TemplateApp {
                             });
                         });
                         ui.separator();
+
+                        // Velocity input
+                        ui.add(Slider::new(&mut self.velocity, 0.0..=15.0).text("Velocity (km/h)"));
+                        ui.separator();
+
+                        // Process button
+                        if ui.button("Process Route").clicked() {
+                            self.process_route();
+                        }
+
+                        ui.separator();
+                        ui.label("Status:");
+                        ui.label(&self.status);
                     });
                 } // End Page 3 Mode Arm
             } // End match self.current_mode
         }); // End CentralPanel
     } // End update fn
 } // End impl eframe::App
+
+impl TemplateApp {
+    fn process_route(&mut self) {
+        // Validate inputs
+        let start_lon = match self.start_lon.parse::<f64>() {
+            Ok(val) => val,
+            Err(_) => {
+                self.status = "Invalid start longitude".to_string();
+                return;
+            }
+        };
+
+        let start_lat = match self.start_lat.parse::<f64>() {
+            Ok(val) => val,
+            Err(_) => {
+                self.status = "Invalid start latitude".to_string();
+                return;
+            }
+        };
+
+        // Validate end point
+        let end_lon = match self.end_lon.parse::<f64>() {
+            Ok(val) => val,
+            Err(_) => {
+                self.status = "Invalid end longitude".to_string();
+                return;
+            }
+        };
+
+        let end_lat = match self.end_lat.parse::<f64>() {
+            Ok(val) => val,
+            Err(_) => {
+                self.status = "Invalid end latitude".to_string();
+                return;
+            }
+        };
+        self.status = "Processing...".to_string();
+    }
+}
 
 /// Fetches a walking route from OpenRouteService API
 ///
