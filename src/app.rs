@@ -65,15 +65,11 @@ pub struct TemplateApp {
     #[serde(skip)] // This how you opt-out of serialization of a field
     value: f32,
     #[serde(skip)]
-    start_lon: String,
-    #[serde(skip)]
-    start_lat: String,
+    start_point: String,
     #[serde(skip)] // This how you opt-out of serialization of a field
     via_points: Vec<String>,
     #[serde(skip)]
-    end_lon: String,
-    #[serde(skip)]
-    end_lat: String,
+    end_point: String,
     #[serde(skip)]
     velocity: f64,
 }
@@ -90,12 +86,10 @@ impl Default for TemplateApp {
             value: 2.7,
             current_mode: AppPage::Page1.to_owned(),
             label: "Type here".to_string(),
-            start_lat: "latitude".to_string(),
-            start_lon: "Longitude".to_string(),
+            start_point: "Start point".to_string(),
             via_points: vec![String::new()],
-            end_lat: "latitude".to_string(),
-            end_lon: "Longitude".to_string(),
-            velocity: 1.0, // Default velocity in m/s
+            end_point: "End point".to_string(),
+            velocity: 3.0, // Default velocity in m/s
             status: String::from("Ready"),
         }
     }
@@ -239,55 +233,46 @@ impl eframe::App for TemplateApp {
 
                 // --- SETTINGS MODE UI ---
                 AppPage::Page3 => {
-                    let mut route_points: Vec<[f64; 2]> = Vec::new();
                     ui.heading("Route Processor");
                     ui.label("Enter route coordinates and process them to ECEF points.");
                     ui.separator();
                     ui.vertical(|ui| {
                         // Start point
                         ui.label("Start Point (lon,lat):");
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label("Longitude:");
-                                ui.text_edit_singleline(&mut self.start_lon);
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Latitude:");
-                                ui.text_edit_singleline(&mut self.start_lat);
-                            });
-                        });
-                        ui.separator();
 
-                        // Via points
-                        ui.label("Via Points (one per line):");
-                        ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-                            for i in 0..self.via_points.len() {
-                                ui.horizontal(|ui| {
-                                    ui.label(format!("Point {}:", i + 1));
-                                    ui.text_edit_singleline(&mut self.via_points[i]);
-                                });
-                            }
-                            // if ui.button("Add Via Point").clicked() {
-                            //     self.via_points.push(String::new());
-                            // }
+                        ui.horizontal(|ui| {
+                            ui.label("Start point:");
+                            ui.text_edit_singleline(&mut self.start_point);
                         });
-                        if ui.button("Add Via Point").clicked() {
-                            self.via_points.push(String::new());
+                    });
+                    ui.separator();
+
+                    // Via points
+                    ui.label("Via Points (one per line):");
+                    ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+                        for i in 0..self.via_points.len() {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Point {}:", i + 1));
+                                ui.text_edit_singleline(&mut self.via_points[i]);
+                            });
                         }
-                        ui.separator();
-
-                        // End point
+                        // if ui.button("Add Via Point").clicked() {
+                        //     self.via_points.push(String::new());
+                        // }
+                    });
+                    if ui.button("Add Via Point").clicked() {
+                        self.via_points.push(String::new());
+                    }
+                    ui.separator();
+                    ui.vertical(|ui| {
+                        // Start point
                         ui.label("End Point (lon,lat):");
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label("Longitude:");
-                                ui.text_edit_singleline(&mut self.end_lon);
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Latitude:");
-                                ui.text_edit_singleline(&mut self.end_lat);
-                            });
+
+                        ui.horizontal(|ui| {
+                            ui.label("End point:");
+                            ui.text_edit_singleline(&mut self.end_point);
                         });
+
                         ui.separator();
 
                         // Velocity input
@@ -310,41 +295,50 @@ impl eframe::App for TemplateApp {
 } // End impl eframe::App
 
 impl TemplateApp {
-    fn process_route(&mut self) {
+    pub fn process_route(&mut self) {
+        let mut route_points: Vec<[f64; 2]> = Vec::new();
         // Validate inputs
-        let start_lon = match self.start_lon.parse::<f64>() {
-            Ok(val) => val,
+        //let start_lon = match self.start_lon.parse::<f64>() {
+        let start_lon = match parse_coords(&self.start_point) {
+            Ok(coords) => {
+                if coords.len() >= 2 {
+                    route_points.push([coords[1], coords[0]]);
+                }
+            }
+
             Err(_) => {
-                self.status = "Invalid start longitude".to_string();
+                self.status = "Invalid start point".to_string();
                 return;
             }
         };
-
-        let start_lat = match self.start_lat.parse::<f64>() {
-            Ok(val) => val,
-            Err(_) => {
-                self.status = "Invalid start latitude".to_string();
-                return;
-            }
-        };
-
+        for i in 0..self.via_points.len() {
+            let viapoint = match parse_coords(&self.via_points[i]) {
+                Ok(coords) => {
+                    if coords.len() >= 2 {
+                        route_points.push([coords[1], coords[0]]);
+                    }
+                }
+                Err(_) => {
+                    self.status = "Invalid via point".to_string();
+                    return;
+                }
+            };
+        }
         // Validate end point
-        let end_lon = match self.end_lon.parse::<f64>() {
-            Ok(val) => val,
+        let end_lon = match parse_coords(&self.end_point) {
+            Ok(coords) => {
+                if coords.len() >= 2 {
+                    route_points.push([coords[1], coords[0]]);
+                }
+            }
             Err(_) => {
-                self.status = "Invalid end longitude".to_string();
+                self.status = "Invalid end point".to_string();
                 return;
             }
         };
-
-        let end_lat = match self.end_lat.parse::<f64>() {
-            Ok(val) => val,
-            Err(_) => {
-                self.status = "Invalid end latitude".to_string();
-                return;
-            }
-        };
-        self.status = "Processing...".to_string();
+        // for debugging
+        //self.status = format!("{:?}", route_points[1]);
+        //let (lon, lat, ele) = get_ors_route(route_points).await?;
     }
 }
 
