@@ -11,3 +11,8 @@ target_wasm
 
 # https://github.com/lycheeverse/lychee
 .lycheecache
+
+# directories created by the project
+umf/
+waypoint/
+Rinex_files/
