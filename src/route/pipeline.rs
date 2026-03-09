@@ -20,9 +20,10 @@ pub async fn run_pipeline(
     route_points: Vec<[f64; 2]>,
     velocity: f64,
     route_name: String,
+    api_key: String,
 ) -> Result<usize, String> {
     let (lon, lat, ele, geojson_text) =
-        get_ors_route(route_points).await.map_err(|e| e.to_string())?;
+        get_ors_route(route_points, api_key).await.map_err(|e| e.to_string())?;
 
     let segments = segmentize(&lon, &lat, &ele, velocity);
 

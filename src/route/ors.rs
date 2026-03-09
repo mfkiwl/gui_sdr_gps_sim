@@ -15,6 +15,7 @@ use super::geojson::GeoJson;
 /// decoded as valid `GeoJSON`.
 pub async fn get_ors_route(
     route_points: Vec<[f64; 2]>,
+    api_key: String,
 ) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>, String), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
 
@@ -31,10 +32,7 @@ pub async fn get_ors_route(
             "Accept",
             "application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8",
         )
-        .header(
-            "Authorization",
-            "5b3ce3597851110001cf6248b413d12a4b7748ac803eae3d90839f42",
-        )
+        .header("Authorization", api_key)
         .json(&body)
         .send()
         .await?;

@@ -96,19 +96,27 @@ pub fn update(app: &mut MyApp, ctx: &egui::Context) {
         ctx.request_repaint_after(std::time::Duration::from_millis(150));
     }
 
-    show_menu_bar(ctx);
+    show_menu_bar(app, ctx);
     show_nav_panel(app, ctx);
     show_central_panel(app, ctx);
+    show_api_key_dialog(app, ctx);
 }
 
 // ---------------------------------------------------------------------------
 // Menu bar
 // ---------------------------------------------------------------------------
 
-fn show_menu_bar(ctx: &egui::Context) {
+fn show_menu_bar(app: &mut MyApp, ctx: &egui::Context) {
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
+                if ui.button("Set ORS API Key…").clicked() {
+                    app.ors_key_input = app.ors_api_key.clone();
+                    app.ors_key_show = false;
+                    app.ors_key_dialog_open = true;
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Quit").clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -119,6 +127,51 @@ fn show_menu_bar(ctx: &egui::Context) {
             });
         });
     });
+}
+
+// ---------------------------------------------------------------------------
+// ORS API key dialog
+// ---------------------------------------------------------------------------
+
+fn show_api_key_dialog(app: &mut MyApp, ctx: &egui::Context) {
+    if !app.ors_key_dialog_open {
+        return;
+    }
+
+    let mut window_open = true;
+    egui::Window::new("Set ORS API Key")
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut window_open)
+        .show(ctx, |ui| {
+            ui.label("OpenRouteService API Key:");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.ors_key_input)
+                        .password(!app.ors_key_show)
+                        .desired_width(300.0),
+                );
+                let eye = if app.ors_key_show { "🔒" } else { "👁" };
+                if ui.button(eye).clicked() {
+                    app.ors_key_show = !app.ors_key_show;
+                }
+            });
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked() {
+                    app.ors_api_key = app.ors_key_input.trim().to_owned();
+                    app.ors_key_dialog_open = false;
+                }
+                if ui.button("Cancel").clicked() {
+                    app.ors_key_dialog_open = false;
+                }
+            });
+        });
+
+    if !window_open {
+        app.ors_key_dialog_open = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +431,7 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
             app.sim_motion_dialog = Some(crate::simulator::open_file_dialog(
                 "Select User Motion File (ECEF x,y,z CSV)",
                 &[("CSV files", &["csv"])],
-                None,
+                crate::paths::umf_dir().ok(),
             ));
         }
     });

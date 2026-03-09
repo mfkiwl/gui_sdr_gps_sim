@@ -205,6 +205,20 @@ pub struct MyApp {
     /// Human-readable error from the last failed RINEX download (not persisted).
     #[serde(skip)]
     pub sim_rinex_dl_error: Option<String>,
+
+    // ── ORS API key dialog ────────────────────────────────────────────────────
+    /// Stored ORS API key — persisted by eframe in the OS app-data directory,
+    /// never in the repository.
+    pub ors_api_key: String,
+    /// Whether the "Set ORS API Key" dialog is open (not persisted).
+    #[serde(skip)]
+    pub ors_key_dialog_open: bool,
+    /// Current text in the API key input field (not persisted).
+    #[serde(skip)]
+    pub ors_key_input: String,
+    /// Whether the key is shown as plain text or obscured (not persisted).
+    #[serde(skip)]
+    pub ors_key_show: bool,
 }
 
 impl Default for MyApp {
@@ -255,6 +269,10 @@ impl Default for MyApp {
             sim_thread: None,
             sim_rinex_download: None,
             sim_rinex_dl_error: None,
+            ors_api_key: String::new(),
+            ors_key_dialog_open: false,
+            ors_key_input: String::new(),
+            ors_key_show: false,
         }
     }
 }
@@ -331,10 +349,17 @@ impl MyApp {
             }
         }
 
+        let api_key = self.ors_api_key.trim().to_owned();
+        if api_key.is_empty() {
+            self.status = AppStatus::Error(
+                "No ORS API key set. Use File → Set ORS API Key… to add your key.".to_owned(),
+            );
+            return;
+        }
         self.status = AppStatus::Working;
         let tx = self.result_tx.clone();
         self.rt.spawn(async move {
-            let result = run_pipeline(route_points, velocity, route_name).await;
+            let result = run_pipeline(route_points, velocity, route_name, api_key).await;
             tx.send(result).ok();
         });
     }

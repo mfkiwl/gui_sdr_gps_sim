@@ -51,6 +51,12 @@ Cross-platform desktop + WASM GUI app using [egui](https://github.com/emilk/egui
 | `src/route/segment.rs` | `Segment` struct; `segmentize()` splits a route into GPS transmit points |
 | `src/route/pipeline.rs` | `run_pipeline()` — orchestrates ORS fetch → segmentize → CSV write |
 | `src/route/geojson.rs` | Serde types for the GeoJSON API response |
+| `src/simulator/mod.rs` | Public API of the simulator module; also hosts `open_file_dialog()` |
+| `src/simulator/state.rs` | `SimSettings`, `SimState`, `SimStatus` — shared between worker and UI |
+| `src/simulator/worker.rs` | `run()` — spawns GPS signal generation loop + HackRF TX consumer thread |
+| `src/rinex.rs` | Downloads today's broadcast RINEX nav file from CDDIS via anonymous FTPS |
+| `src/map_plugin.rs` | `ClickCapturePlugin` / `WaypointMarkerPlugin` for the `walkers` map widget |
+| `src/paths.rs` | `umf_dir()` / `waypoint_dir()` — create and return well-known working directories |
 
 **Data flow for route generation:**
 
@@ -58,6 +64,14 @@ Cross-platform desktop + WASM GUI app using [egui](https://github.com/emilk/egui
 2. `MyApp::generate()` parses inputs, then spawns `run_pipeline()` on the Tokio runtime (`self.rt`).
 3. `run_pipeline()` calls `get_ors_route()` → `segmentize()` → `write_transmit_points_to_csv()`.
 4. The result is sent back via `mpsc::channel` (`result_tx` / `result_rx`). `ui::update()` polls the channel each frame and updates `AppStatus`.
+
+**Data flow for GPS simulation:**
+
+1. User selects a RINEX nav file (or downloads today's from CDDIS via `rinex::download_today_rinex()`) and a UMF motion file, then clicks "Start".
+2. The UI spawns a dedicated OS thread running `simulator::run()`.
+3. `worker::do_run()` builds a `gps::SignalGenerator`, opens `HackRF` on GPS L1 (1 575.42 MHz), then feeds 100 ms IQ blocks through an `mpsc::sync_channel` to a second thread that writes to HackRF via USB.
+4. Progress (`current_step`, `bytes_sent`) and final status (`Done`/`Stopped`/`Error`) are communicated back via `Arc<Mutex<SimState>>`. The UI polls this each frame.
+5. The user can cancel at any time via `Arc<AtomicBool>` stop flag.
 
 **UI rendering pattern:**
 
@@ -72,7 +86,7 @@ Because egui closures hold borrows, mutations triggered by button clicks are **d
 
 - `MyApp` serialises via serde; eframe restores it on startup via `eframe::get_value`.
 - Fields tagged `#[serde(skip)]` (`status`, `rt`, `result_rx`, `result_tx`) are re-created fresh in `Default::default()`.
-- Waypoints are *also* written to `waypoint.json` in the working directory when the user clicks "Save Changes"; the file is re-read when navigating to the ManageWaypoints page.
+- Waypoints are persisted in `./waypoint/` (created by `paths::waypoint_dir()`); UMF motion files go in `./umf/`; downloaded RINEX nav files go in `./Rinex_files/`.
 
 **Image assets** in `assets/img/` are embedded at compile time via `egui::include_image!()`. Paths are relative to the `.rs` file containing the macro — all image macros live in `src/ui.rs`, so paths use `../assets/img/`.
 
