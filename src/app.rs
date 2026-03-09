@@ -1,543 +1,477 @@
-use egui::{ScrollArea, Slider};
-use geo::{Distance, Geodesic, InterpolatePoint, Point};
-use reqwest;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+//! Application state, initialisation, and eframe integration.
 
-#[derive(Debug, PartialEq, Clone, Copy, serde::Deserialize, serde::Serialize)] // #[derive(Default)] makes it easy to create a starting instance
-// #[derive(...)]: Asks Rust to auto-generate common trait implementations
-// (Debug for printing, PartialEq for ==, Clone/Copy for duplicating).
-// enum: Defines a type with specific choice types (e.g., AppPage can only be Page1, Page2 or Page3).
-enum AppPage {
-    Page1,
-    Page2,
-    Page3,
+use std::{
+    path::PathBuf,
+    sync::mpsc,
+};
+
+use crate::{
+    geo::parse_coords,
+    route::run_pipeline,
+    ui,
+    waypoint::{Waypoint, WaypointEntry},
+};
+
+/// Identifies which page is shown in the central panel.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, serde::Serialize, serde::Deserialize, Default)]
+pub enum AppPage {
+    #[default]
+    Home,
+    SdrGpsSimulator,
+    CreateUmfRoute,
+    ManageWaypoints,
+    ManageUmfRoutes,
 }
 
-/// We derive Deserialize/Serialize so we can persist app state on shutdown.
-
-/// GeoJSON structure for OpenRouteService response
-#[derive(Serialize, Deserialize, Debug)]
-pub struct GeoJson {
-    pub r#type: String,
-    pub features: Vec<Feature>,
+/// How the `GeoJSON` route geometry is obtained on the [`AppPage::CreateUmfRoute`] page.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
+pub enum RouteSource {
+    /// Fetch the route from the `OpenRouteService` directions API.
+    #[default]
+    OrsApi,
+    /// Load a pre-existing `GeoJSON` file from disk.
+    GeoJsonFile,
 }
 
-/// Feature in GeoJSON
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Feature {
-    pub geometry: Geometry,
+/// Selects the active tab on the [`AppPage::SdrGpsSimulator`] page.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
+pub enum SimTab {
+    /// Route-based simulation driven by a user-motion CSV file.
+    #[default]
+    Dynamic,
+    /// Single fixed-position simulation (static coordinates).
+    Static,
 }
 
-/// Geometry in GeoJSON
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Geometry {
-    pub coordinates: Vec<[f64; 3]>, // [lon, lat, elevation]
+/// Tracks the current state of the background route-generation task.
+#[derive(Default)]
+pub enum AppStatus {
+    #[default]
+    Idle,
+    Working,
+    Done(usize),
+    Error(String),
 }
 
-/// Represents a segment of the route with associated metadata
-#[derive(Debug, Clone)]
-pub struct Segment {
-    pub segment_id: i32,
-    pub start_point: Point,
-    pub start_elevation: f64,
-    pub end_point: Point,
-    pub end_elevation: f64,
-    pub segment_distance: f64,
-    pub velocity: f64,
-    pub transmit_point_distance: f64,
-    pub transmit_points: Vec<[f64; 3]>,
-}
-
+/// Top-level application state, persisted across sessions via eframe storage.
 #[derive(serde::Deserialize, serde::Serialize)]
-#[serde(default)] // #[derive(Default)] makes it easy to create a starting instance
-// #[derive(...)]: Asks Rust to auto-generate common trait implementations
-// (Debug for printing, PartialEq for ==, Clone/Copy for duplicating).
-// if we add new fields, give them default values when deserializing old state
+#[serde(default)]
+pub struct MyApp {
+    /// Currently visible page.
+    #[serde(skip)]
+    pub current_mode: AppPage,
 
-// --- Update TemplateApp Struct (holds ALL application state) ---
-//Holds all the data your UI needs.
-pub struct TemplateApp {
-    // Example stuff:
-    current_mode: AppPage, // To control which view is shown
-    label: String,
-    status: String,
-    #[serde(skip)] // This how you opt-out of serialization of a field
-    value: f32,
+    /// Waypoints loaded from / saved to `waypoint.json`.
+    pub waypoints: Vec<Waypoint>,
+    /// Set to `true` the first time `load_waypoints()` is called this session.
+    /// Guards `on_exit` so we never overwrite `waypoint.json` with default-empty data.
     #[serde(skip)]
-    start_point: String,
-    #[serde(skip)] // This how you opt-out of serialization of a field
-    via_points: Vec<String>,
+    pub waypoints_loaded: bool,
+    /// Scratch space for the add / edit waypoint form.
+    pub new_waypoint: Waypoint,
+    /// Filter string applied to the waypoint table (not persisted).
     #[serde(skip)]
-    end_point: String,
+    pub filter_text: String,
+    /// Column the waypoint table is sorted by, if any (not persisted).
     #[serde(skip)]
-    velocity: f64,
+    pub sort_column: Option<usize>,
+    /// `true` = ascending order, `false` = descending.
+    pub sort_ascending: bool,
+    /// Index of the waypoint currently being edited, if any (not persisted).
+    #[serde(skip)]
+    pub editing_index: Option<usize>,
+
+    /// Coordinate text input (`lat, lon`) for the add/edit form (not persisted).
+    #[serde(skip)]
+    pub new_waypoint_coords: String,
+    /// Parse error from the coordinates field, cleared on success (not persisted).
+    #[serde(skip)]
+    pub new_waypoint_coord_error: Option<String>,
+
+    /// Name used for the output files (`{route_name}.csv` / `{route_name}.geojson`).
+    #[serde(skip)]
+    pub route_name: String,
+
+    /// How to obtain the route `GeoJSON` (not persisted).
+    #[serde(skip)]
+    pub route_source: RouteSource,
+
+    /// Path to a user-supplied `GeoJSON` route file (not persisted).
+    #[serde(skip)]
+    pub route_geojson_path: Option<PathBuf>,
+
+    /// Pending file-dialog receiver for the `GeoJSON` picker (not persisted).
+    #[serde(skip)]
+    pub route_geojson_dialog: Option<mpsc::Receiver<Option<PathBuf>>>,
+
+    /// Route start coordinate (`lat, lon` as free text).
+    #[serde(skip)]
+    pub start: WaypointEntry,
+    /// Optional intermediate waypoints.
+    #[serde(skip)]
+    pub viapoints: Vec<WaypointEntry>,
+    /// Route end coordinate (`lat, lon` as free text).
+    #[serde(skip)]
+    pub end: WaypointEntry,
+    /// Simulation velocity in km/h (stored as text to allow free typing).
+    #[serde(skip)]
+    pub velocity: String,
+
+    /// HTTP tile fetcher for the OSM map widget (not persisted).
+    #[serde(skip)]
+    pub map_tiles: Option<walkers::HttpTiles>,
+    /// Map pan/zoom state (not persisted).
+    #[serde(skip)]
+    pub map_memory: walkers::MapMemory,
+    /// Most recent click on the map, pending user action (not persisted).
+    #[serde(skip)]
+    pub map_clicked: Option<crate::map_plugin::ClickResult>,
+
+    /// HTTP tile fetcher for the waypoint-manager map (not persisted).
+    #[serde(skip)]
+    pub wp_map_tiles: Option<walkers::HttpTiles>,
+    /// Map pan/zoom state for the waypoint manager (not persisted).
+    #[serde(skip)]
+    pub wp_map_memory: walkers::MapMemory,
+    /// Most recent click on the waypoint map (not persisted).
+    #[serde(skip)]
+    pub wp_map_clicked: Option<crate::map_plugin::ClickResult>,
+    /// Index into `waypoints` of the currently selected table row (not persisted).
+    #[serde(skip)]
+    pub wp_selected_row: Option<usize>,
+
+    /// Status of the background pipeline task (not persisted).
+    #[serde(skip)]
+    pub status: AppStatus,
+    /// Tokio runtime used to spawn the pipeline task (not persisted).
+    #[serde(skip)]
+    pub rt: tokio::runtime::Runtime,
+    /// Receives the pipeline result from the background task (not persisted).
+    #[serde(skip)]
+    pub result_rx: mpsc::Receiver<Result<usize, String>>,
+    /// Sender cloned into the background task to deliver its result (not persisted).
+    #[serde(skip)]
+    pub result_tx: mpsc::Sender<Result<usize, String>>,
+
+    // ── GPS Simulator ─────────────────────────────────────────────────────────
+    /// Active tab on the GPS Simulator page (not persisted).
+    #[serde(skip)]
+    pub sim_tab: SimTab,
+
+    /// Path to the RINEX navigation file (not persisted).
+    #[serde(skip)]
+    pub sim_rinex_path: Option<PathBuf>,
+
+    /// Path to the user-motion CSV file (not persisted).
+    #[serde(skip)]
+    pub sim_motion_path: Option<PathBuf>,
+
+    /// Pending RINEX file-dialog receiver (not persisted).
+    #[serde(skip)]
+    pub sim_rinex_dialog: Option<mpsc::Receiver<Option<PathBuf>>>,
+
+    /// Pending motion-file dialog receiver (not persisted).
+    #[serde(skip)]
+    pub sim_motion_dialog: Option<mpsc::Receiver<Option<PathBuf>>>,
+
+    /// `HackRF` TX VGA gain in dB (0–47, not persisted).
+    #[serde(skip)]
+    pub sim_txvga_gain: u16,
+
+    /// Whether to enable the `HackRF` RF amplifier (not persisted).
+    #[serde(skip)]
+    pub sim_amp_enable: bool,
+
+    /// Baseband sample rate in Hz (not persisted).
+    #[serde(skip)]
+    pub sim_frequency: usize,
+
+    /// Shared simulation state polled by the UI (not persisted).
+    #[serde(skip)]
+    pub sim_state: std::sync::Arc<std::sync::Mutex<crate::simulator::SimState>>,
+
+    /// Flag set by the UI to request the simulation to stop (not persisted).
+    #[serde(skip)]
+    pub sim_stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+
+    /// Handle to the simulation worker thread (not persisted).
+    #[serde(skip)]
+    pub sim_thread: Option<std::thread::JoinHandle<()>>,
+
+    /// Receives the result of a background RINEX download task (not persisted).
+    #[serde(skip)]
+    pub sim_rinex_download: Option<mpsc::Receiver<Result<PathBuf, String>>>,
+
+    /// Human-readable error from the last failed RINEX download (not persisted).
+    #[serde(skip)]
+    pub sim_rinex_dl_error: Option<String>,
 }
 
-// --- Manually Implement `Default` (starting values) ---
-// We do this manually because ColorChoice/AppMode don't have automatic defaults.
-impl Default for TemplateApp {
+impl Default for MyApp {
     fn default() -> Self {
+        let (result_tx, result_rx) = mpsc::channel::<Result<usize, String>>();
         Self {
-            // Self { ... }: Syntax to create an instance of the struct (TemplateApp) within its own impl block.
-            // // Put all the app defaults here.
-            // Example stuff:
-            //label: "Hello World!".to_owned(),
-            value: 2.7,
-            current_mode: AppPage::Page1.to_owned(),
-            label: "Type here".to_string(),
-            start_point: "Start point".to_string(),
-            via_points: vec![String::new()],
-            end_point: "End point".to_string(),
-            velocity: 3.0, // Default velocity in m/s
-            status: String::from("Ready"),
+            current_mode: AppPage::Home,
+            waypoints: Vec::new(),
+            waypoints_loaded: false,
+            new_waypoint: Waypoint::default(),
+            filter_text: String::new(),
+            sort_column: None,
+            sort_ascending: true,
+            editing_index: None,
+            new_waypoint_coords: String::new(),
+            new_waypoint_coord_error: None,
+            route_name: String::new(),
+            route_source: RouteSource::OrsApi,
+            route_geojson_path: None,
+            route_geojson_dialog: None,
+            start: WaypointEntry::default(),
+            viapoints: Vec::new(),
+            end: WaypointEntry::default(),
+            velocity: "3.0".to_owned(),
+            map_tiles: None,
+            map_memory: walkers::MapMemory::default(),
+            map_clicked: None,
+            wp_map_tiles: None,
+            wp_map_memory: walkers::MapMemory::default(),
+            wp_map_clicked: None,
+            wp_selected_row: None,
+            status: AppStatus::Idle,
+            rt: tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime"),
+            result_rx,
+            result_tx,
+            sim_tab: SimTab::Dynamic,
+            sim_rinex_path: crate::rinex::today_rinex_path().filter(|p| p.exists()),
+            sim_motion_path: None,
+            sim_rinex_dialog: None,
+            sim_motion_dialog: None,
+            sim_txvga_gain: 20,
+            sim_amp_enable: false,
+            sim_frequency: 2_600_000,
+            sim_state: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::simulator::SimState::default(),
+            )),
+            sim_stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            sim_thread: None,
+            sim_rinex_download: None,
+            sim_rinex_dl_error: None,
         }
     }
 }
 
-impl TemplateApp {
-    /// Called once before the first frame.
+impl MyApp {
+    /// Called once by eframe before the first frame.
+    /// Restores persisted state when available.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // This is also where you can customize the look and feel of egui using
-        // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
-
-        // Load previous app state (if any).
-        // Note that you must enable the `persistence` feature for this to work.
         if let Some(storage) = cc.storage {
             eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default()
         } else {
-            Default::default()
+            Self::default()
         }
+    }
+
+    /// Validates the route inputs and spawns the background pipeline task.
+    pub fn generate(&mut self) {
+        let route_name = self.route_name.trim().to_owned();
+        if route_name.is_empty() {
+            self.status = AppStatus::Error("Route name must not be empty.".to_owned());
+            return;
+        }
+        let velocity: f64 = self.velocity.trim().parse().unwrap_or(3.0);
+
+        match self.route_source {
+            RouteSource::OrsApi => self.generate_ors(route_name, velocity),
+            RouteSource::GeoJsonFile => self.generate_from_geojson_file(route_name, velocity),
+        }
+    }
+
+    /// ORS API branch of [`Self::generate`].
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "coords.len() >= 2 guard makes [0]/[1] safe"
+    )]
+    fn generate_ors(&mut self, route_name: String, velocity: f64) {
+        let mut route_points: Vec<[f64; 2]> = Vec::new();
+
+        match parse_coords(&self.start.text) {
+            Ok(coords) if coords.len() >= 2 => route_points.push([coords[1], coords[0]]),
+            Ok(_) => {
+                self.status = AppStatus::Error("Start: enter lat, lon".to_owned());
+                return;
+            }
+            Err(e) => {
+                self.status = AppStatus::Error(format!("Start: {e}"));
+                return;
+            }
+        }
+
+        for (i, via) in self.viapoints.iter().enumerate() {
+            match parse_coords(&via.text) {
+                Ok(coords) if coords.len() >= 2 => route_points.push([coords[1], coords[0]]),
+                Ok(_) => {
+                    self.status = AppStatus::Error(format!("Via {}: enter lat, lon", i + 1));
+                    return;
+                }
+                Err(e) => {
+                    self.status = AppStatus::Error(format!("Via {}: {e}", i + 1));
+                    return;
+                }
+            }
+        }
+
+        match parse_coords(&self.end.text) {
+            Ok(coords) if coords.len() >= 2 => route_points.push([coords[1], coords[0]]),
+            Ok(_) => {
+                self.status = AppStatus::Error("End: enter lat, lon".to_owned());
+                return;
+            }
+            Err(e) => {
+                self.status = AppStatus::Error(format!("End: {e}"));
+                return;
+            }
+        }
+
+        self.status = AppStatus::Working;
+        let tx = self.result_tx.clone();
+        self.rt.spawn(async move {
+            let result = run_pipeline(route_points, velocity, route_name).await;
+            tx.send(result).ok();
+        });
+    }
+
+    /// `GeoJSON`-file branch of [`Self::generate`].
+    fn generate_from_geojson_file(&mut self, route_name: String, velocity: f64) {
+        let Some(path) = self.route_geojson_path.clone() else {
+            self.status = AppStatus::Error("No GeoJSON file selected.".to_owned());
+            return;
+        };
+        self.status = AppStatus::Working;
+        let tx = self.result_tx.clone();
+        self.rt.spawn(async move {
+            let result =
+                crate::route::run_pipeline_from_geojson(path, velocity, route_name).await;
+            tx.send(result).ok();
+        });
+    }
+
+    /// Reloads waypoints from `waypoint/waypoint.json` into `self.waypoints`.
+    pub fn load_waypoints(&mut self) {
+        let path = crate::paths::waypoint_dir()
+            .map(|d| d.join("waypoint.json"))
+            .unwrap_or_else(|e| {
+                log::warn!("Could not create waypoint directory: {e}");
+                PathBuf::from("waypoint.json")
+            });
+        self.waypoints = crate::waypoint::load_waypoints(&path);
+        self.waypoints_loaded = true;
+    }
+
+    /// Persists `self.waypoints` to `waypoint/waypoint.json`.
+    pub fn save_waypoints(&self) {
+        let path = crate::paths::waypoint_dir()
+            .map(|d| d.join("waypoint.json"))
+            .unwrap_or_else(|e| {
+                log::warn!("Could not create waypoint directory: {e}");
+                PathBuf::from("waypoint.json")
+            });
+        crate::waypoint::save_waypoints(&path, &self.waypoints);
+    }
+
+    /// Copies the waypoint at `index` into the edit form.
+    /// Calling again with the same index cancels the edit.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "index comes from .position(), always valid"
+    )]
+    pub fn edit_waypoint(&mut self, index: usize) {
+        if self.editing_index == Some(index) {
+            self.editing_index = None;
+            return;
+        }
+        self.editing_index = Some(index);
+        self.new_waypoint = self.waypoints[index].clone();
+        self.new_waypoint_coords =
+            format!("{}, {}", self.waypoints[index].lat, self.waypoints[index].lon);
+        self.new_waypoint_coord_error = None;
+    }
+
+    /// Removes the waypoint at `index`.
+    pub fn delete_waypoint(&mut self, index: usize) {
+        self.waypoints.remove(index);
+    }
+
+    /// Spawns an async task that downloads today's RINEX nav file from CDDIS.
+    ///
+    /// The result is delivered via `sim_rinex_download`; the UI polls it each
+    /// frame and updates `sim_rinex_path` on success.
+    pub fn download_rinex(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.sim_rinex_download = Some(rx);
+        self.sim_rinex_dl_error = None;
+        self.rt.spawn(async move {
+            let result = crate::rinex::download_today_rinex().await;
+            tx.send(result).ok();
+        });
+    }
+
+    /// Spawns the simulation worker thread.
+    ///
+    /// Resets shared state, configures settings from current UI values, and
+    /// spawns a thread that drives the GPS signal generator and `HackRF` device.
+    pub fn start_simulation(&mut self) {
+        use std::sync::atomic::Ordering;
+
+        #[expect(
+            clippy::unwrap_used,
+            reason = "mutex poison means a prior panic; reset is best-effort"
+        )]
+        {
+            *self.sim_state.lock().unwrap() = crate::simulator::SimState {
+                status: crate::simulator::SimStatus::Running,
+                ..crate::simulator::SimState::default()
+            };
+        }
+        self.sim_stop_flag.store(false, Ordering::Relaxed);
+
+        let rinex_path = self
+            .sim_rinex_path
+            .clone()
+            .expect("start_simulation requires sim_rinex_path; caller must check");
+        let motion_path = self
+            .sim_motion_path
+            .clone()
+            .expect("start_simulation requires sim_motion_path; caller must check");
+
+        let settings = crate::simulator::SimSettings {
+            frequency: self.sim_frequency,
+            txvga_gain: self.sim_txvga_gain,
+            amp_enable: self.sim_amp_enable,
+        };
+        let state = std::sync::Arc::clone(&self.sim_state);
+        let stop = std::sync::Arc::clone(&self.sim_stop_flag);
+
+        self.sim_thread = Some(std::thread::spawn(move || {
+            crate::simulator::run(&rinex_path, &motion_path, &settings, &state, &stop);
+        }));
     }
 }
 
-// This block tells eframe that TemplateApp knows how to be an application.
-// It requires the update method.
-impl eframe::App for TemplateApp {
-    // The heart of egui! Called every frame (many times per second).
-    // &mut self: Gets mutable access to your TemplateApp instance. This is crucial!
-    //            It means update can change the data (like self.value += 1.0).
-    // ctx: &egui::Context: Provides access to egui's context (input, style, etc.).
-    // |ui| { ... }: A closure! An inline function where you define the UI for this frame.
-    //               egui gives you the ui object to use inside it.
-    // ui.heading(...), ui.horizontal(...), etc.: Methods called on the ui object add widgets (visual elements) to the screen.
-    // &mut self.label, &mut self.value: Passing mutable borrows (&mut) links the widget directly to your state field.
-    //                                   When the user interacts, the widget modifies your TemplateApp field.
-
-    /// Called by the framework to save state before shutdown.
+impl eframe::App for MyApp {
+    /// Persists app state before shutdown.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, self);
     }
 
-    /// Called each time the UI needs repainting, which may be many times per second.
+    /// Auto-saves waypoints to `waypoint.json` on exit, but only if the
+    /// `ManageWaypoints` page was visited this session (guarded by `waypoints_loaded`).
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.waypoints_loaded {
+            self.save_waypoints();
+        }
+    }
+
+    /// Called every frame to render the UI.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Put your widgets into a `SidePanel`, `TopBottomPanel`, `CentralPanel`, `Window` or `Area`.
-        // For inspiration and more examples, go to https://emilk.github.io/egui
-
-        // --- Top Panel: Menu Bar ---
-        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                // Use the menu bar layout helper
-
-                // File Menu
-                ui.menu_button("File", |ui| {
-                    // Creates "File" button with dropdown
-                    // Place all menu items here
-                    if ui.button("Quit").clicked() {
-                        // Send command to close the window
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                }); // End File Menu dropdown
-
-                // Display state on the right side of the menu bar
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.horizontal(|ui| {
-                        egui::widgets::global_theme_preference_buttons(ui);
-                    });
-                }); // End right-aligned section
-            }); // End menu bar
-        }); // End Top Panel
-
-        // --- Left Panel: Info / Tools ---
-        egui::SidePanel::left("nav_panel")
-            .default_width(150.0) // Set a default width
-            .show(ctx, |ui| {
-                ui.heading("nav_panel");
-                ui.separator(); // Visual dividing line
-                // Mode Menu
-                //ui.menu_button("Mode", |ui| {
-                // Creates "Mode" button with dropdown
-                // Use radio buttons to change mode, close menu on click
-                // Clicking a mode radio button (ui.radio_value(&mut self.current_mode, ...)
-                // directly changes the self.current_mode field.
-                if ui.button("Page 1").clicked() {
-                    self.current_mode = AppPage::Page1; // Assuming a `AppPage` enum with a `Page1` variant
-                }
-                {
-                    ui.close();
-                }
-                if ui.button("Page 2").clicked() {
-                    self.current_mode = AppPage::Page2; // Assuming a `AppPage` enum with a `Page2` variant
-                }
-                {
-                    ui.close();
-                }
-                if ui.button("Page 3").clicked() {
-                    self.current_mode = AppPage::Page3; // Assuming a `AppPage` enum with a `Page3` variant
-                }
-                {
-                    ui.close();
-                }
-                //}); // End Mode Menu dropdown
-
-                ui.separator();
-
-                // Add some spacing at the bottom
-                ui.allocate_space(ui.available_size());
-            }); // End Side Panel
-
-        // --- Central Panel: Main Content (Changes based on Mode) ---
-        egui::CentralPanel::default().show(ctx, |ui| {
-            //ui.heading(format!("Current page: {:?}", self.current_mode));
-            //ui.separator();
-
-            // Use `match` to show different UI based on `self.current_mode`
-            // self.current_mode holds the state (View, Edit, or Settings).
-            // The match self.current_mode { ... } block reads this state.
-            // Based on the state, different UI code runs, showing the View, Edit, or Settings widgets.
-            match self.current_mode {
-                // --- Page 1 MODE UI ---
-                AppPage::Page1 => {
-                    // add the rest of the page 1 layout here
-                    //ui.label(self.label.to_string());
-                    ui.heading("Original eframe template");
-
-                    ui.horizontal(|ui| {
-                        ui.label("Write something: ");
-                        ui.text_edit_singleline(&mut self.label);
-                    });
-
-                    ui.add(egui::Slider::new(&mut self.value, 0.0..=10.0).text("value"));
-                    if ui.button("Increment").clicked() {
-                        self.value += 1.0;
-                    }
-
-                    ui.separator();
-                } // End Page 1 Mode Arm
-
-                // --- PAGE 2 UI ---
-                AppPage::Page2 => {
-                    ui.heading("Page 2");
-                    // add the rest of the page 2 layout here
-                } // End Page 2 Mode Arm
-
-                // --- SETTINGS MODE UI ---
-                AppPage::Page3 => {
-                    ui.heading("Route Processor");
-                    ui.label("Enter route coordinates and process them to ECEF points.");
-                    ui.separator();
-                    ui.vertical(|ui| {
-                        // Start point
-                        ui.label("Start Point (lon,lat):");
-
-                        ui.horizontal(|ui| {
-                            ui.label("Start point:");
-                            ui.text_edit_singleline(&mut self.start_point);
-                        });
-                    });
-                    ui.separator();
-
-                    // Via points
-                    ui.label("Via Points (one per line):");
-                    ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-                        for i in 0..self.via_points.len() {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("Point {}:", i + 1));
-                                ui.text_edit_singleline(&mut self.via_points[i]);
-                            });
-                        }
-                        // if ui.button("Add Via Point").clicked() {
-                        //     self.via_points.push(String::new());
-                        // }
-                    });
-                    if ui.button("Add Via Point").clicked() {
-                        self.via_points.push(String::new());
-                    }
-                    ui.separator();
-                    ui.vertical(|ui| {
-                        // Start point
-                        ui.label("End Point (lon,lat):");
-
-                        ui.horizontal(|ui| {
-                            ui.label("End point:");
-                            ui.text_edit_singleline(&mut self.end_point);
-                        });
-
-                        ui.separator();
-
-                        // Velocity input
-                        ui.add(Slider::new(&mut self.velocity, 0.0..=15.0).text("Velocity (km/h)"));
-                        ui.separator();
-
-                        // Process button
-                        if ui.button("Process Route").clicked() {
-                            self.process_route();
-                        }
-
-                        ui.separator();
-                        ui.label("Status:");
-                        ui.label(&self.status);
-                    });
-                } // End Page 3 Mode Arm
-            } // End match self.current_mode
-        }); // End CentralPanel
-    } // End update fn
-} // End impl eframe::App
-
-impl TemplateApp {
-    pub fn process_route(&mut self) {
-        let mut route_points: Vec<[f64; 2]> = Vec::new();
-        // Validate inputs
-        //let start_lon = match self.start_lon.parse::<f64>() {
-        let start_lon = match parse_coords(&self.start_point) {
-            Ok(coords) => {
-                if coords.len() >= 2 {
-                    route_points.push([coords[1], coords[0]]);
-                }
-            }
-
-            Err(_) => {
-                self.status = "Invalid start point".to_string();
-                return;
-            }
-        };
-        for i in 0..self.via_points.len() {
-            let viapoint = match parse_coords(&self.via_points[i]) {
-                Ok(coords) => {
-                    if coords.len() >= 2 {
-                        route_points.push([coords[1], coords[0]]);
-                    }
-                }
-                Err(_) => {
-                    self.status = "Invalid via point".to_string();
-                    return;
-                }
-            };
-        }
-        // Validate end point
-        let end_lon = match parse_coords(&self.end_point) {
-            Ok(coords) => {
-                if coords.len() >= 2 {
-                    route_points.push([coords[1], coords[0]]);
-                }
-            }
-            Err(_) => {
-                self.status = "Invalid end point".to_string();
-                return;
-            }
-        };
-        // for debugging
-        //self.status = format!("{:?}", route_points[1]);
-        //let (lon, lat, ele) = get_ors_route(route_points).await?;
+        ui::update(self, ctx);
     }
-}
-
-/// Fetches a walking route from OpenRouteService API
-///
-/// # Arguments
-/// * `route_points` - Vector of [lon, lat] coordinates defining the route
-///
-/// # Returns
-/// * `Result<(Vec<f64>, Vec<f64>, Vec<f64>), Box<dyn std::error::Error>>` -
-///   Tuple containing longitude, latitude, and elevation vectors
-pub async fn get_ors_route(
-    route_points: Vec<[f64; 2]>,
-) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>), Box<dyn std::error::Error>> {
-    // Create HTTP client
-    let client = reqwest::Client::new();
-
-    // Prepare request body for OpenRouteService API
-    let body = json!({
-        "coordinates": route_points,
-        "elevation": "true",
-        "instructions": "false"
-    });
-
-    // Send POST request to OpenRouteService API
-    let response = client
-        .post("https://api.openrouteservice.org/v2/directions/foot-walking/geojson")
-        .header("Content-Type", "application/json; charset=utf-8")
-        .header(
-            "Accept",
-            "application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8",
-        )
-        .header(
-            "Authorization",
-            "5b3ce3597851110001cf6248b413d12a4b7748ac803eae3d90839f42",
-        )
-        .json(&body)
-        .send()
-        .await?;
-
-    // Check if request was successful
-    if response.status().is_success() {
-        // Parse response as GeoJSON
-        let geojson_str = response.text().await?;
-        let geojson: GeoJson = serde_json::from_str(&geojson_str)
-            .map_err(|e| format!("Failed to parse GeoJSON: {}", e))?;
-
-        let mut lon: Vec<f64> = Vec::new();
-        let mut lat: Vec<f64> = Vec::new();
-        let mut ele: Vec<f64> = Vec::new();
-
-        // Extract coordinates from features
-        for feature in &geojson.features {
-            let coordinates = &feature.geometry.coordinates;
-            for coord in coordinates.iter() {
-                lon.push(coord[0]);
-                lat.push(coord[1]);
-                ele.push(coord[2]);
-            }
-        }
-
-        Ok((lon, lat, ele))
-    } else {
-        // Handle API errors
-        eprintln!("Request failed with status: {}", response.status());
-        let error_text = response.text().await?;
-        eprintln!("Error details: {}", error_text);
-        Err("Request failed".into())
-    }
-}
-
-/// Converts coordinate vectors into segments with transmit points
-///
-/// # Arguments
-/// * `lon` - Vector of longitudes
-/// * `lat` - Vector of latitudes
-/// * `ele` - Vector of elevations
-/// * `segment_velocity` - Velocity in km/h for segment calculation
-///
-/// # Returns
-/// * `Vec<Segment>` - Vector of route segments
-pub fn segmentize(
-    lon: Vec<f64>,
-    lat: Vec<f64>,
-    ele: Vec<f64>,
-    segment_velocity: f64, // segment velocity in km/h
-) -> Vec<Segment> {
-    let mut segments = Vec::new();
-
-    // Ensure we have at least 2 points to create a segment
-    if lon.len() < 2 || lat.len() < 2 || ele.len() < 2 {
-        return segments;
-    }
-
-    // Create segments between consecutive points
-    for i in 0..lat.len() - 1 {
-        let start_point_geo = Point::new(lon[i], lat[i]);
-        let end_point_geo = Point::new(lon[i + 1], lat[i + 1]);
-        let avg_elevation = (ele[i] + ele[i + 1]) / 2.0; // average elevation between start_point and end_point
-
-        // Calculate geodesic distance between points
-        let segment_geo_distance = Geodesic.distance(start_point_geo, end_point_geo);
-
-        // Calculate transmit point distance (0.1 seconds at given velocity)
-        let transmit_point_distance_geo = segment_velocity / 36.0;
-
-        // Generate intermediate points along the line
-        let transmit_points_geo: Vec<Point> = Geodesic
-            .points_along_line(
-                start_point_geo,
-                end_point_geo,
-                transmit_point_distance_geo,
-                false,
-            )
-            .collect();
-
-        // Convert Point objects to [f64; 3] arrays for consistency
-        let transmit_points: Vec<[f64; 3]> = transmit_points_geo
-            .into_iter()
-            .map(|point| [point.x(), point.y(), avg_elevation])
-            .collect();
-
-        println!("{}", avg_elevation);
-
-        let segment = Segment {
-            segment_id: i as i32,
-            start_point: start_point_geo,
-            start_elevation: ele[i],
-            end_point: end_point_geo,
-            end_elevation: ele[i + 1],
-            segment_distance: segment_geo_distance,
-            velocity: segment_velocity / 3.6, // Convert km/h to m/s
-            transmit_point_distance: transmit_point_distance_geo,
-            transmit_points,
-        };
-
-        segments.push(segment);
-    }
-
-    segments
-}
-
-/// Converts LLA (Latitude, Longitude, Altitude) to ECEF (Earth-Centered Earth-Fixed) coordinates
-///
-/// # Arguments
-/// * `lat` - Latitude in degrees
-/// * `lon` - Longitude in degrees
-/// * `alt` - Altitude in meters
-///
-/// # Returns
-/// * `(f64, f64, f64)` - ECEF X, Y, Z coordinates in meters
-pub fn lla_to_ecef(lat: f64, lon: f64, alt: f64) -> (f64, f64, f64) {
-    // WGS84 ellipsoid parameters
-    const A: f64 = 6378137.0; // semi-major axis in meters
-    const F: f64 = 1.0 / 298.257223563; // flattening
-    const E2: f64 = 2.0 * F - F * F; // first eccentricity squared
-    // Convert degrees to radians
-    let lat_rad = lat.to_radians();
-    let lon_rad = lon.to_radians();
-
-    // Calculate N (radius of curvature in the prime vertical)
-    let cos_lat = lat_rad.cos();
-    let sin_lat = lat_rad.sin();
-    let n = A / (1.0 - E2 * sin_lat * sin_lat).sqrt();
-
-    // Convert to ECEF coordinates
-    let x = (n + alt) * cos_lat * lon_rad.cos();
-    let y = (n + alt) * cos_lat * lon_rad.sin();
-    let z = (n * (1.0 - E2) + alt) * sin_lat;
-
-    (x, y, z)
-}
-
-/// Converts all transmit points to ECEF format and writes them to a CSV file
-///
-/// # Arguments
-/// * `transmit_points` - Vector of [lon, lat, alt] points
-/// * `filename` - Name of the output CSV file
-pub fn write_transmit_points_to_csv(
-    transmit_points: Vec<[f64; 3]>,
-    filename: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use std::fs::File;
-    use std::io::Write;
-
-    let mut file = File::create(filename)?;
-
-    // Write data to CSV
-    for (index, point) in transmit_points.iter().enumerate() {
-        let (x, y, z) = lla_to_ecef(point[1], point[0], point[2]); // lat, lon, alt
-        writeln!(file, "{:.1},{:.6},{:.6},{:.6}", index as f64 * 0.1, x, y, z)?;
-    }
-
-    Ok(())
-}
-
-pub fn parse_coords(input: &str) -> Result<Vec<f64>, Box<dyn std::error::Error>> {
-    let parsed_coords: Result<Vec<f64>, _> =
-        input.split(',').map(|s| s.trim().parse::<f64>()).collect();
-
-    parsed_coords.map_err(|e| e.into())
 }

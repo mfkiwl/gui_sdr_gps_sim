@@ -1,0 +1,30 @@
+[
+  {
+    "lat": 52.373108,
+    "lon": 4.89236,
+    "name": "de dam",
+    "location": "Amsterdam",
+    "category": "bezienswaardigheid"
+  },
+  {
+    "lat": 52.487363,
+    "lon": 4.66033,
+    "name": "kapper",
+    "location": "beverwijk",
+    "category": "middenstand"
+  },
+  {
+    "lat": 52.374537,
+    "lon": 4.883519,
+    "name": "westerkerk",
+    "location": "amsterdam",
+    "category": "kerken"
+  },
+  {
+    "lat": 52.499838,
+    "lon": 4.818785,
+    "name": "wijngaard kerk",
+    "location": "wormer",
+    "category": "kerken"
+  }
+]

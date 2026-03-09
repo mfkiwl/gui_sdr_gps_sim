@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo clippy:*)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(cargo check:*)",
+      "Bash(cargo metadata:*)",
+      "Bash(sed:*)",
+      "Bash(cargo test:*)",
+      "Read(//c//**)",
+      "Read(//d//**)",
+      "Bash(find /c /d /e -maxdepth 4 -name \"gps_simulator\" -type d)",
+      "Bash(xargs grep:*)",
+      "Bash(touch:*)",
+      "Bash(cargo:*)"
+    ]
+  }
+}
