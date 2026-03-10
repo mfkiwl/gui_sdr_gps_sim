@@ -56,6 +56,16 @@ pub fn update(app: &mut MyApp, ctx: &egui::Context) {
         }
     }
 
+    // Keep repainting while any file-dialog is open so the result is picked
+    // up immediately when the OS dialog closes (egui receives no input events
+    // while a native dialog has focus).
+    if app.sim_rinex_dialog.is_some()
+        || app.sim_motion_dialog.is_some()
+        || app.route_geojson_dialog.is_some()
+    {
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+    }
+
     // Poll a pending RINEX download task.
     if let Some(rx) = &app.sim_rinex_download {
         if let Ok(result) = rx.try_recv() {

@@ -16,7 +16,9 @@ const CDDIS_HOST: &str = "gdc.cddis.eosdis.nasa.gov";
 ///
 /// Returns a human-readable [`String`] if the directory cannot be created.
 pub fn rinex_dir() -> Result<PathBuf, String> {
-    let dir = PathBuf::from("./Rinex_files");
+    let dir = std::env::current_dir()
+        .map_err(|e| format!("Cannot determine working directory: {e}"))?
+        .join("Rinex_files");
     if !dir.exists() {
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("Cannot create '{}': {e}", dir.display()))?;
