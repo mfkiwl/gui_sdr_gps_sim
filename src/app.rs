@@ -206,6 +206,26 @@ pub struct MyApp {
     #[serde(skip)]
     pub sim_rinex_dl_error: Option<String>,
 
+    // ── Draw Route (ManageUmfRoutes page) ─────────────────────────────────────
+    /// Polyline points added by clicking on the draw-route map (not persisted).
+    #[serde(skip)]
+    pub draw_route_points: Vec<walkers::Position>,
+    /// HTTP tile fetcher for the draw-route map (not persisted).
+    #[serde(skip)]
+    pub draw_map_tiles: Option<walkers::HttpTiles>,
+    /// Pan/zoom state for the draw-route map (not persisted).
+    #[serde(skip)]
+    pub draw_map_memory: walkers::MapMemory,
+    /// Most recent click on the draw-route map, pending insertion (not persisted).
+    #[serde(skip)]
+    pub draw_map_clicked: Option<crate::map_plugin::ClickResult>,
+    /// Error from the last "Use Route" save attempt (not persisted).
+    #[serde(skip)]
+    pub draw_route_status: Option<String>,
+    /// Pending file-dialog receiver for `GPX`/`KML` import (not persisted).
+    #[serde(skip)]
+    pub draw_import_dialog: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
+
     // ── ORS API key dialog ────────────────────────────────────────────────────
     /// Stored ORS API key — persisted by eframe in the OS app-data directory,
     /// never in the repository.
@@ -269,6 +289,12 @@ impl Default for MyApp {
             sim_thread: None,
             sim_rinex_download: None,
             sim_rinex_dl_error: None,
+            draw_route_points: Vec::new(),
+            draw_map_tiles: None,
+            draw_map_memory: walkers::MapMemory::default(),
+            draw_map_clicked: None,
+            draw_route_status: None,
+            draw_import_dialog: None,
             ors_api_key: String::new(),
             ors_key_dialog_open: false,
             ors_key_input: String::new(),

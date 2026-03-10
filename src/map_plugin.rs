@@ -61,3 +61,59 @@ impl Plugin for WaypointMarkerPlugin<'_> {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+
+/// Plugin that draws a polyline through an ordered sequence of geographic
+/// positions.
+///
+/// Segments are rendered as solid blue lines; each vertex gets a numbered
+/// circle so the route order is immediately visible.
+pub struct PolylinePlugin<'a> {
+    /// Ordered points that define the polyline.
+    pub points: &'a [walkers::Position],
+}
+
+impl Plugin for PolylinePlugin<'_> {
+    fn run(
+        self: Box<Self>,
+        ui: &mut egui::Ui,
+        _response: &egui::Response,
+        projector: &Projector,
+        _map_memory: &MapMemory,
+    ) {
+        if self.points.is_empty() {
+            return;
+        }
+
+        let painter = ui.painter();
+        let stroke = egui::Stroke::new(3.0, egui::Color32::from_rgb(30, 120, 255));
+
+        let screen_pts: Vec<egui::Pos2> = self
+            .points
+            .iter()
+            .map(|p| {
+                let s = projector.project(*p);
+                egui::pos2(s.x, s.y)
+            })
+            .collect();
+
+        for segment in screen_pts.windows(2) {
+            if let [a, b] = segment {
+                painter.line_segment([*a, *b], stroke);
+            }
+        }
+
+        for (i, &pos) in screen_pts.iter().enumerate() {
+            painter.circle_filled(pos, 8.0, egui::Color32::from_rgb(30, 120, 255));
+            painter.circle_stroke(pos, 8.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
+            painter.text(
+                pos,
+                egui::Align2::CENTER_CENTER,
+                (i + 1).to_string(),
+                egui::FontId::proportional(9.0),
+                egui::Color32::WHITE,
+            );
+        }
+    }
+}

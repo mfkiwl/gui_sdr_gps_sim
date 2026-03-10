@@ -41,6 +41,7 @@ rfd = "0.15"
 suppaftp = { version = "6", default-features = false, features = ["native-tls"] }
 flate2 = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+roxmltree = "0.20"
 
 [profile.release]
 opt-level = 3

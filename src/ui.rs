@@ -9,7 +9,7 @@ use walkers::{HttpTiles, Map, lat_lon, sources::OpenStreetMap};
 
 use crate::{
     app::{AppPage, AppStatus, MyApp, RouteSource, SimTab},
-    map_plugin::{ClickCapturePlugin, WaypointMarkerPlugin},
+    map_plugin::{ClickCapturePlugin, PolylinePlugin, WaypointMarkerPlugin},
     waypoint::{Waypoint, WaypointEntry},
 };
 
@@ -56,12 +56,37 @@ pub fn update(app: &mut MyApp, ctx: &egui::Context) {
         }
     }
 
+    // Poll the GPX/KML import dialog for the draw-route map.
+    if let Some(rx) = &app.draw_import_dialog {
+        if let Ok(maybe_path) = rx.try_recv() {
+            app.draw_import_dialog = None;
+            if let Some(path) = maybe_path {
+                match crate::import::load_route_file(&path) {
+                    Ok(points) => {
+                        app.draw_route_points = points
+                            .into_iter()
+                            .map(|[lat, lon]| walkers::lat_lon(lat, lon))
+                            .collect();
+                        if let Some(first) = app.draw_route_points.first() {
+                            app.draw_map_memory.center_at(*first);
+                        }
+                        app.draw_route_status = None;
+                    }
+                    Err(e) => {
+                        app.draw_route_status = Some(e);
+                    }
+                }
+            }
+        }
+    }
+
     // Keep repainting while any file-dialog is open so the result is picked
     // up immediately when the OS dialog closes (egui receives no input events
     // while a native dialog has focus).
     if app.sim_rinex_dialog.is_some()
         || app.sim_motion_dialog.is_some()
         || app.route_geojson_dialog.is_some()
+        || app.draw_import_dialog.is_some()
     {
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
@@ -323,7 +348,39 @@ fn show_central_panel(app: &mut MyApp, ctx: &egui::Context) {
                     app.save_waypoints();
                 }
             }
-            AppPage::ManageUmfRoutes => show_routes_page(ui),
+            AppPage::ManageUmfRoutes => {
+                let actions = show_routes_page(app, ui);
+                if actions.undo_last {
+                    app.draw_route_points.pop();
+                }
+                if actions.clear {
+                    app.draw_route_points.clear();
+                    app.draw_route_status = None;
+                }
+                if actions.open_import_dialog {
+                    app.draw_import_dialog = Some(crate::simulator::open_file_dialog(
+                        "Import GPX or KML Route File",
+                        &[("Route files", &["gpx", "kml"])],
+                        None,
+                    ));
+                }
+                if actions.use_route {
+                    match save_drawn_route(&app.draw_route_points) {
+                        Ok(path) => {
+                            app.route_source = RouteSource::GeoJsonFile;
+                            app.route_geojson_path = Some(path);
+                            if app.route_name.is_empty() {
+                                app.route_name = "drawn_route".to_owned();
+                            }
+                            app.current_mode = AppPage::CreateUmfRoute;
+                            app.draw_route_status = None;
+                        }
+                        Err(e) => {
+                            app.draw_route_status = Some(e);
+                        }
+                    }
+                }
+            }
         }
     });
 }
@@ -1239,10 +1296,154 @@ fn show_add_waypoint_form(app: &mut MyApp, ui: &mut egui::Ui) {
 }
 
 // ---------------------------------------------------------------------------
-// Page: UMF Route Manager
+// Page: UMF Route Manager — Draw Route
 // ---------------------------------------------------------------------------
 
-fn show_routes_page(ui: &mut egui::Ui) {
-    ui.heading("UMF Route Manager");
-    // TODO: add route management UI
+/// Deferred mutations requested by the route-manager page UI.
+#[derive(Default)]
+struct DrawRouteActions {
+    /// Save the polyline as `GeoJSON` and navigate to the Route Creator.
+    use_route: bool,
+    /// Remove the last added vertex.
+    undo_last: bool,
+    /// Clear all vertices.
+    clear: bool,
+    /// Open a file-picker dialog to import a `GPX` or `KML` file.
+    open_import_dialog: bool,
+}
+
+/// Lazily initialises the HTTP tile fetcher for the draw-route map.
+fn ensure_draw_map_tiles(app: &mut MyApp, ctx: &egui::Context) {
+    if app.draw_map_tiles.is_none() {
+        app.draw_map_tiles = Some(HttpTiles::new(OpenStreetMap, ctx.clone()));
+    }
+}
+
+/// Renders the draw-route OSM map with the polyline overlay and click capture.
+fn show_draw_map_widget(
+    map_tiles: &mut Option<HttpTiles>,
+    map_memory: &mut walkers::MapMemory,
+    map_clicked: &mut Option<crate::map_plugin::ClickResult>,
+    points: &[walkers::Position],
+    ui: &mut egui::Ui,
+) {
+    let center = lat_lon(52.37308687621991, 4.893432625781817);
+    let map = Map::new(
+        map_tiles.as_mut().map(|t| t as &mut dyn walkers::Tiles),
+        map_memory,
+        center,
+    )
+    .with_plugin(ClickCapturePlugin { out: map_clicked })
+    .with_plugin(PolylinePlugin { points });
+
+    let available_width = ui.available_width();
+    ui.add_sized([available_width, 400.0], map);
+}
+
+/// Serialises `points` as a `GeoJSON` `FeatureCollection` containing a single
+/// `LineString` feature and writes it to `{umf_dir}/drawn_route.geojson`.
+///
+/// # Errors
+/// Returns a human-readable error string if the directory cannot be resolved,
+/// `GeoJSON` serialisation fails, or the file cannot be written.
+fn save_drawn_route(points: &[walkers::Position]) -> Result<std::path::PathBuf, String> {
+    let coords: Vec<serde_json::Value> = points
+        .iter()
+        .map(|p| serde_json::json!([p.x(), p.y()]))
+        .collect();
+
+    let geojson = serde_json::to_string_pretty(&serde_json::json!({
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": coords
+            },
+            "properties": {}
+        }]
+    }))
+    .map_err(|e| e.to_string())?;
+
+    let path = crate::paths::umf_dir()?.join("drawn_route.geojson");
+    std::fs::write(&path, geojson).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> DrawRouteActions {
+    let mut actions = DrawRouteActions::default();
+
+    ui.heading("Draw Route");
+    ui.label(
+        "Click on the map to place waypoints one by one. \
+         When the route is complete, press \"Use Route →\" to open it in the Route Creator.",
+    );
+    ui.add_space(4.0);
+
+    let n = app.draw_route_points.len();
+    ui.horizontal(|ui| {
+        ui.label(format!("{n} point{}", if n == 1 { "" } else { "s" }));
+        if ui
+            .add_enabled(n > 0, egui::Button::new("Undo"))
+            .on_hover_text("Remove the last point")
+            .clicked()
+        {
+            actions.undo_last = true;
+        }
+        if ui
+            .add_enabled(n > 0, egui::Button::new("Clear"))
+            .on_hover_text("Remove all points")
+            .clicked()
+        {
+            actions.clear = true;
+        }
+        ui.separator();
+        let importing = app.draw_import_dialog.is_some();
+        if ui
+            .add_enabled(
+                !importing,
+                egui::Button::new(if importing { "Importing…" } else { "Import GPX / KML…" }),
+            )
+            .on_hover_text("Replace the current route with points from a GPX or KML file")
+            .clicked()
+        {
+            actions.open_import_dialog = true;
+        }
+        ui.add_space(8.0);
+        if ui
+            .add_enabled(n >= 2, egui::Button::new("Use Route →"))
+            .on_hover_text("Save as GeoJSON and open in the Route Creator")
+            .clicked()
+        {
+            actions.use_route = true;
+        }
+    });
+
+    if let Some(err) = &app.draw_route_status {
+        ui.colored_label(egui::Color32::RED, err);
+    }
+
+    ui.separator();
+
+    ensure_draw_map_tiles(app, ui.ctx());
+
+    // Clone points into a local vec so we can pass its slice to the plugin
+    // while separately borrowing the map tile / memory fields.
+    let points: Vec<walkers::Position> = app.draw_route_points.clone();
+
+    show_draw_map_widget(
+        &mut app.draw_map_tiles,
+        &mut app.draw_map_memory,
+        &mut app.draw_map_clicked,
+        &points,
+        ui,
+    );
+
+    // A click on the map is handled immediately: append the position.
+    if let Some(click) = app.draw_map_clicked.take() {
+        app.draw_route_points.push(click.position);
+        app.draw_route_status = None;
+    }
+
+    actions
 }

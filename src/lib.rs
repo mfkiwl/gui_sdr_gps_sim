@@ -3,6 +3,7 @@
 mod api_key;
 mod app;
 mod geo;
+mod import;
 mod map_plugin;
 mod paths;
 mod rinex;
