@@ -15,7 +15,10 @@
       "Bash(find /c /d /e -maxdepth 4 -name \"gps_simulator\" -type d)",
       "Bash(xargs grep:*)",
       "Bash(touch:*)",
-      "Bash(cargo:*)"
+      "Bash(cargo:*)",
+      "WebFetch(domain:giscience.github.io)",
+      "WebFetch(domain:api.openrouteservice.org)",
+      "WebFetch(domain:openrouteservice.org)"
     ]
   }
 }

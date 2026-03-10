@@ -4,7 +4,13 @@ use serde_json::json;
 
 use super::geojson::GeoJson;
 
-/// Fetches a walking route from the `OpenRouteService` API.
+/// Fetches a route from the `OpenRouteService` directions API.
+///
+/// * `profile`   — routing profile URL segment (e.g. `"foot-walking"`,
+///   `"driving-car"`).
+/// * `optimized` — when `true` the engine uses contraction hierarchies for
+///   speed; set to `false` to enable turn restrictions and avoid-polygon
+///   features.
 ///
 /// Returns `(lon, lat, ele, geojson_text)` where the first three are separate
 /// coordinate vectors for [`super::segment::segmentize`] and `geojson_text`
@@ -16,17 +22,24 @@ use super::geojson::GeoJson;
 pub async fn get_ors_route(
     route_points: Vec<[f64; 2]>,
     api_key: String,
+    profile: &str,
+    optimized: bool,
 ) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>, String), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
 
     let body = json!({
         "coordinates": route_points,
         "elevation": "true",
-        "instructions": "false"
+        "instructions": "false",
+        "optimized": optimized,
     });
 
+    let url = format!(
+        "https://api.openrouteservice.org/v2/directions/{profile}/geojson"
+    );
+
     let response = client
-        .post("https://api.openrouteservice.org/v2/directions/foot-walking/geojson")
+        .post(url)
         .header("Content-Type", "application/json; charset=utf-8")
         .header(
             "Accept",

@@ -647,6 +647,28 @@ fn sim_file_row(
 // Page: UMF Route Creator
 // ---------------------------------------------------------------------------
 
+/// Available `ORS` routing profiles as `(api_id, display_label)` pairs.
+const ORS_PROFILES: &[(&str, &str)] = &[
+    ("foot-walking", "Foot – Walking"),
+    ("foot-hiking", "Foot – Hiking"),
+    ("cycling-regular", "Cycling – Regular"),
+    ("cycling-road", "Cycling – Road"),
+    ("cycling-mountain", "Cycling – Mountain"),
+    ("cycling-electric", "Cycling – Electric"),
+    ("driving-car", "Driving – Car"),
+    ("driving-hgv", "Driving – HGV"),
+    ("wheelchair", "Wheelchair"),
+];
+
+/// Returns the display label for a given `ORS` profile id, or the raw id if
+/// not found.
+fn ors_profile_label(profile: &str) -> &str {
+    ORS_PROFILES
+        .iter()
+        .find(|(id, _)| *id == profile)
+        .map_or(profile, |(_, label)| label)
+}
+
 /// Deferred mutations requested by the route-creator page UI.
 #[derive(Default)]
 struct RoutePageActions {
@@ -759,6 +781,30 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
 
     match app.route_source {
         RouteSource::OrsApi => {
+            // ── ORS settings ──────────────────────────────────────────────────
+            ui.horizontal(|ui| {
+                ui.label("Profile:");
+                egui::ComboBox::from_id_salt("ors_profile")
+                    .selected_text(ors_profile_label(&app.ors_profile))
+                    .show_ui(ui, |ui| {
+                        for &(id, label) in ORS_PROFILES {
+                            ui.selectable_value(
+                                &mut app.ors_profile,
+                                id.to_owned(),
+                                label,
+                            );
+                        }
+                    });
+                ui.add_space(8.0);
+                ui.checkbox(&mut app.ors_optimized, "Optimized routing")
+                    .on_hover_text(
+                        "Uses contraction hierarchies for faster routing.\n\
+                         Disable to enable turn restrictions and avoid-polygon features.",
+                    );
+            });
+
+            ui.separator();
+
             // ── ORS: start / via / end coordinate inputs ──────────────────────
             ui.horizontal(|ui| {
                 ui.label("Start:");
