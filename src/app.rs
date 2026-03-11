@@ -213,6 +213,26 @@ pub struct MyApp {
     #[serde(skip)]
     pub sim_rinex_dl_error: Option<String>,
 
+    // ── Route Library (ManageUmfRoutes page) ──────────────────────────────────
+    /// Routes loaded from `umf/library.json` (not persisted).
+    #[serde(skip)]
+    pub library: Vec<crate::library::RouteEntry>,
+    /// Whether `library` has been loaded from disk this session (not persisted).
+    #[serde(skip)]
+    pub library_loaded: bool,
+    /// Index of the selected row in the library table (not persisted).
+    #[serde(skip)]
+    pub library_selected_row: Option<usize>,
+    /// Route points of the currently selected library entry (not persisted).
+    #[serde(skip)]
+    pub lib_route_points: Vec<walkers::Position>,
+    /// HTTP tile fetcher for the library map (not persisted).
+    #[serde(skip)]
+    pub lib_map_tiles: Option<walkers::HttpTiles>,
+    /// Pan/zoom state for the library map (not persisted).
+    #[serde(skip)]
+    pub lib_map_memory: walkers::MapMemory,
+
     // ── Draw Route (ManageUmfRoutes page) ─────────────────────────────────────
     /// Polyline points added by clicking on the draw-route map (not persisted).
     #[serde(skip)]
@@ -300,6 +320,12 @@ impl Default for MyApp {
             sim_thread: None,
             sim_rinex_download: None,
             sim_rinex_dl_error: None,
+            library: Vec::new(),
+            library_loaded: false,
+            library_selected_row: None,
+            lib_route_points: Vec::new(),
+            lib_map_tiles: None,
+            lib_map_memory: walkers::MapMemory::default(),
             draw_route_points: Vec::new(),
             draw_map_tiles: None,
             draw_map_memory: walkers::MapMemory::default(),
@@ -474,6 +500,73 @@ impl MyApp {
                 crate::route::run_pipeline_from_geojson(path, velocity, route_name).await;
             tx.send(result).ok();
         });
+    }
+
+    /// Loads `umf/library.json` into `self.library` (once per session).
+    pub fn load_library(&mut self) {
+        if self.library_loaded {
+            return;
+        }
+        if let Ok(path) = crate::library::library_path() {
+            self.library = crate::library::load_library(&path);
+        }
+        self.library_loaded = true;
+    }
+
+    /// Loads the route `GeoJSON` for `name` and populates `lib_route_points`.
+    ///
+    /// Centres `lib_map_memory` on the first point of the route. Clears the
+    /// point list silently if the file cannot be read or parsed.
+    pub fn load_library_route(&mut self, name: &str) {
+        self.lib_route_points.clear();
+
+        let path = match crate::paths::umf_dir() {
+            Ok(d) => d.join(format!("{name}.geojson")),
+            Err(_) => return,
+        };
+
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return;
+        };
+
+        let Some(coords) = json
+            .pointer("/features/0/geometry/coordinates")
+            .or_else(|| json.pointer("/geometry/coordinates"))
+            .or_else(|| json.pointer("/coordinates"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            return;
+        };
+
+        for pt in coords {
+            let Some(arr) = pt.as_array() else { continue };
+            let lon = arr.first().and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            let lat = arr.get(1).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            self.lib_route_points.push(walkers::lat_lon(lat, lon));
+        }
+
+        if let Some(first) = self.lib_route_points.first() {
+            self.lib_map_memory.center_at(*first);
+        }
+    }
+
+    /// Scans `umf/` for new `CSV` routes, appends them to `self.library`,
+    /// and persists the result to `library.json`.
+    pub fn scan_library(&mut self) {
+        let umf_dir = match crate::paths::umf_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                log::warn!("Cannot determine umf dir: {e}");
+                return;
+            }
+        };
+        let lib_path = umf_dir.join("library.json");
+        let new_entries = crate::library::scan_new_routes(&umf_dir, &self.library);
+        self.library.extend(new_entries);
+        crate::library::save_library(&lib_path, &self.library);
     }
 
     /// Reloads waypoints from `waypoint/waypoint.json` into `self.waypoints`.

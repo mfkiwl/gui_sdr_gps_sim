@@ -9,7 +9,7 @@ use walkers::{HttpTiles, Map, lat_lon, sources::OpenStreetMap};
 
 use crate::{
     app::{AppPage, AppStatus, MyApp, RouteSource, SimTab},
-    map_plugin::{ClickCapturePlugin, PolylinePlugin, WaypointMarkerPlugin},
+    map_plugin::{ClickCapturePlugin, PolylinePlugin, RouteLinePlugin, WaypointMarkerPlugin},
     waypoint::{Waypoint, WaypointEntry},
 };
 
@@ -265,6 +265,9 @@ fn navigate(app: &mut MyApp, new_page: AppPage) {
     if new_page == AppPage::ManageWaypoints {
         app.load_waypoints();
     }
+    if new_page == AppPage::ManageUmfRoutes {
+        app.load_library();
+    }
     app.current_mode = new_page;
 }
 
@@ -364,7 +367,17 @@ fn show_central_panel(app: &mut MyApp, ctx: &egui::Context) {
                 }
             }
             AppPage::ManageUmfRoutes => {
-                show_routes_page(ui);
+                let actions = show_routes_page(app, ui);
+                if actions.scan {
+                    app.scan_library();
+                }
+                if let Some(i) = actions.select_row {
+                    app.library_selected_row = Some(i);
+                    if let Some(entry) = app.library.get(i) {
+                        let name = entry.name.clone();
+                        app.load_library_route(&name);
+                    }
+                }
             }
         }
     });
@@ -1478,6 +1491,126 @@ fn show_draw_map_widget(
     ui.add_sized([available_width, 400.0], map);
 }
 
-fn show_routes_page(ui: &mut egui::Ui) {
+/// Deferred mutations requested by the route-manager page.
+#[derive(Default)]
+struct RouteLibraryActions {
+    /// Trigger a library scan.
+    scan: bool,
+    /// Row that was clicked.
+    select_row: Option<usize>,
+}
+
+fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> RouteLibraryActions {
+    let mut actions = RouteLibraryActions::default();
+
     ui.heading("Manage UMF Routes");
+    ui.add_space(4.0);
+
+    if ui
+        .button("Scan library for new routes")
+        .on_hover_text("Scan umf/ for CSV files not yet in library.json")
+        .clicked()
+    {
+        actions.scan = true;
+    }
+
+    ui.add_space(6.0);
+    ui.separator();
+
+    show_library_table(app, ui, &mut actions);
+
+    ui.separator();
+
+    // ── Route preview map ─────────────────────────────────────────────────
+    if app.lib_map_tiles.is_none() {
+        app.lib_map_tiles = Some(HttpTiles::new(walkers::sources::OpenStreetMap, ui.ctx().clone()));
+    }
+
+    let points: Vec<walkers::Position> = app.lib_route_points.clone();
+    let map = walkers::Map::new(
+        app.lib_map_tiles.as_mut().map(|t| t as &mut dyn walkers::Tiles),
+        &mut app.lib_map_memory,
+        lat_lon(52.37308687621991, 4.893432625781817),
+    )
+    .with_plugin(RouteLinePlugin { points: &points });
+
+    let w = ui.available_width();
+    ui.add_sized([w, 300.0], map);
+
+    if app.lib_route_points.is_empty() {
+        // Overlay a hint when nothing is selected yet.
+        ui.label(egui::RichText::new("Select a route above to preview it on the map.").weak());
+    }
+
+    actions
+}
+
+fn show_library_table(app: &MyApp, ui: &mut egui::Ui, actions: &mut RouteLibraryActions) {
+    if app.library.is_empty() {
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(
+                "No routes in library. Press \"Scan library for new routes\".",
+            )
+            .weak(),
+        );
+        return;
+    }
+
+    egui::ScrollArea::vertical()
+        .max_height(280.0)
+        .show(ui, |ui| {
+            egui_extras::TableBuilder::new(ui)
+                .column(egui_extras::Column::initial(200.0).at_least(120.0)) // Name
+                .column(egui_extras::Column::initial(110.0).at_least(80.0))  // Distance
+                .column(egui_extras::Column::initial(110.0).at_least(80.0))  // Duration
+                .column(egui_extras::Column::initial(110.0).at_least(80.0))  // Velocity
+                .sense(egui::Sense::click())
+                .resizable(true)
+                .striped(true)
+                .header(24.0, |mut row| {
+                    row.col(|ui| { ui.strong("Route Name"); });
+                    row.col(|ui| { ui.strong("Distance"); });
+                    row.col(|ui| { ui.strong("Duration"); });
+                    row.col(|ui| { ui.strong("Velocity"); });
+                })
+                .body(|mut body| {
+                    for (i, entry) in app.library.iter().enumerate() {
+                        body.row(22.0, |mut row| {
+                            row.set_selected(app.library_selected_row == Some(i));
+
+                            row.col(|ui| { ui.label(&entry.name); });
+                            row.col(|ui| {
+                                ui.label(format!("{:.2} km", entry.distance_m / 1000.0));
+                            });
+                            row.col(|ui| { ui.label(format_duration(entry.duration_s)); });
+                            row.col(|ui| {
+                                ui.label(format!("{:.1} km/h", entry.velocity_kmh));
+                            });
+
+                            if row.response().clicked() {
+                                actions.select_row = Some(i);
+                            }
+                        });
+                    }
+                });
+        });
+}
+
+/// Formats a duration in seconds as `H:MM:SS` (or `M:SS` when < 1 h).
+fn format_duration(seconds: f64) -> String {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "duration is always non-negative and well within u64 range"
+    )]
+    let total = seconds as u64;
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
 }

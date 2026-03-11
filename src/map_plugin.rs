@@ -64,6 +64,46 @@ impl Plugin for WaypointMarkerPlugin<'_> {
 
 // ---------------------------------------------------------------------------
 
+/// Plugin that draws a route as a plain polyline without vertex markers.
+///
+/// Use this for pre-computed routes with many points where individual
+/// vertex numbering would be visually overwhelming.
+pub struct RouteLinePlugin<'a> {
+    /// Ordered points that define the route.
+    pub points: &'a [walkers::Position],
+}
+
+impl Plugin for RouteLinePlugin<'_> {
+    fn run(
+        self: Box<Self>,
+        ui: &mut egui::Ui,
+        _response: &egui::Response,
+        projector: &Projector,
+        _map_memory: &MapMemory,
+    ) {
+        if self.points.is_empty() {
+            return;
+        }
+        let painter = ui.painter();
+        let stroke = egui::Stroke::new(3.0, egui::Color32::from_rgb(220, 50, 50));
+        let screen_pts: Vec<egui::Pos2> = self
+            .points
+            .iter()
+            .map(|p| {
+                let s = projector.project(*p);
+                egui::pos2(s.x, s.y)
+            })
+            .collect();
+        for segment in screen_pts.windows(2) {
+            if let [a, b] = segment {
+                painter.line_segment([*a, *b], stroke);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+
 /// Plugin that draws a polyline through an ordered sequence of geographic
 /// positions.
 ///

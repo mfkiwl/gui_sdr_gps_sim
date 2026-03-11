@@ -2,6 +2,7 @@
 
 mod app;
 mod geo;
+mod library;
 mod import;
 mod map_plugin;
 mod paths;
