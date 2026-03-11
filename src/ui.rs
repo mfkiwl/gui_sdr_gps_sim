@@ -768,13 +768,13 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
         );
         ui.selectable_value(
             &mut app.route_source,
-            RouteSource::DrawImport,
-            "Draw route",
+            RouteSource::ImportKmlGpx,
+            "Import KML / GPX",
         );
         ui.selectable_value(
             &mut app.route_source,
-            RouteSource::ImportKmlGpx,
-            "Import KML / GPX",
+            RouteSource::DrawImport,
+            "Draw route",
         );
     });
 

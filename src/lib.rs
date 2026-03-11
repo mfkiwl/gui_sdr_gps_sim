@@ -1,6 +1,5 @@
 #![warn(clippy::all, rust_2018_idioms)]
 
-mod api_key;
 mod app;
 mod geo;
 mod import;

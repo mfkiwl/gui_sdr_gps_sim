@@ -11,7 +11,7 @@ use std::path::Path;
 /// # Errors
 /// Returns a human-readable error string if the file cannot be read, the
 /// extension is unsupported, or the content cannot be parsed.
-pub fn load_route_file(path: &Path) -> Result<Vec<[f64; 2]>, String> {
+pub(crate) fn load_route_file(path: &Path) -> Result<Vec<[f64; 2]>, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("Read '{}': {e}", path.display()))?;
 
