@@ -31,6 +31,10 @@ pub enum RouteSource {
     OrsApi,
     /// Load a pre-existing `GeoJSON` file from disk.
     GeoJsonFile,
+    /// Draw a polyline on the map.
+    DrawImport,
+    /// Import a `GPX` or `KML` file and use its track as the route.
+    ImportKmlGpx,
 }
 
 /// Selects the active tab on the [`AppPage::SdrGpsSimulator`] page.
@@ -233,6 +237,9 @@ pub struct MyApp {
     /// Pending file-dialog receiver for `GPX`/`KML` import (not persisted).
     #[serde(skip)]
     pub draw_import_dialog: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
+    /// Path of the last successfully imported `GPX`/`KML` file (not persisted).
+    #[serde(skip)]
+    pub draw_import_path: Option<std::path::PathBuf>,
 
     // ── ORS API key dialog ────────────────────────────────────────────────────
     /// Stored ORS API key — persisted by eframe in the OS app-data directory,
@@ -305,6 +312,7 @@ impl Default for MyApp {
             draw_map_clicked: None,
             draw_route_status: None,
             draw_import_dialog: None,
+            draw_import_path: None,
             ors_api_key: String::new(),
             ors_key_dialog_open: false,
             ors_key_input: String::new(),
@@ -336,6 +344,9 @@ impl MyApp {
         match self.route_source {
             RouteSource::OrsApi => self.generate_ors(route_name, velocity),
             RouteSource::GeoJsonFile => self.generate_from_geojson_file(route_name, velocity),
+            RouteSource::DrawImport | RouteSource::ImportKmlGpx => {
+                self.generate_from_drawn_route(route_name, velocity);
+            }
         }
     }
 
@@ -400,6 +411,60 @@ impl MyApp {
             let result =
                 run_pipeline(route_points, velocity, route_name, api_key, profile, optimized)
                     .await;
+            tx.send(result).ok();
+        });
+    }
+
+    /// Draw/Import branch of [`Self::generate`].
+    ///
+    /// Serialises the current `draw_route_points` as a `GeoJSON` `FeatureCollection`,
+    /// writes it to `umf/drawn_route.geojson`, then runs the segmentation pipeline.
+    fn generate_from_drawn_route(&mut self, route_name: String, velocity: f64) {
+        if self.draw_route_points.len() < 2 {
+            self.status =
+                AppStatus::Error("Draw at least 2 points on the map first.".to_owned());
+            return;
+        }
+
+        let coords: Vec<serde_json::Value> = self
+            .draw_route_points
+            .iter()
+            .map(|p| serde_json::json!([p.x(), p.y()]))
+            .collect();
+
+        let geojson = match serde_json::to_string_pretty(&serde_json::json!({
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "geometry": { "type": "LineString", "coordinates": coords },
+                "properties": {}
+            }]
+        })) {
+            Ok(s) => s,
+            Err(e) => {
+                self.status = AppStatus::Error(format!("Failed to serialise route: {e}"));
+                return;
+            }
+        };
+
+        let path = match crate::paths::umf_dir() {
+            Ok(dir) => dir.join("drawn_route.geojson"),
+            Err(e) => {
+                self.status = AppStatus::Error(e);
+                return;
+            }
+        };
+
+        if let Err(e) = std::fs::write(&path, geojson) {
+            self.status = AppStatus::Error(format!("Failed to write GeoJSON: {e}"));
+            return;
+        }
+
+        self.status = AppStatus::Working;
+        let tx = self.result_tx.clone();
+        self.rt.spawn(async move {
+            let result =
+                crate::route::run_pipeline_from_geojson(path, velocity, route_name).await;
             tx.send(result).ok();
         });
     }
