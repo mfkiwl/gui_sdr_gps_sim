@@ -649,7 +649,7 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                     state.current_step as f64 / 10.0,
                     state.total_steps as f64 / 10.0,
                 ))
-                .desired_width(f32::INFINITY),
+                .desired_width(500.0),
         );
 
         ui.label(format!(
