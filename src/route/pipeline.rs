@@ -22,10 +22,9 @@ pub async fn run_pipeline(
     route_name: String,
     api_key: String,
     profile: String,
-    optimized: bool,
 ) -> Result<usize, String> {
     let (lon, lat, ele, geojson_text) =
-        get_ors_route(route_points, api_key, &profile, optimized)
+        get_ors_route(route_points, api_key, &profile)
             .await
             .map_err(|e| e.to_string())?;
 

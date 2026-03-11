@@ -6,11 +6,8 @@ use super::geojson::GeoJson;
 
 /// Fetches a route from the `OpenRouteService` directions API.
 ///
-/// * `profile`   — routing profile URL segment (e.g. `"foot-walking"`,
+/// * `profile` — routing profile URL segment (e.g. `"foot-walking"`,
 ///   `"driving-car"`).
-/// * `optimized` — when `true` the engine uses contraction hierarchies for
-///   speed; set to `false` to enable turn restrictions and avoid-polygon
-///   features.
 ///
 /// Returns `(lon, lat, ele, geojson_text)` where the first three are separate
 /// coordinate vectors for [`super::segment::segmentize`] and `geojson_text`
@@ -23,7 +20,6 @@ pub async fn get_ors_route(
     route_points: Vec<[f64; 2]>,
     api_key: String,
     profile: &str,
-    optimized: bool,
 ) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>, String), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
 
@@ -31,7 +27,6 @@ pub async fn get_ors_route(
         "coordinates": route_points,
         "elevation": "true",
         "instructions": "false",
-        "optimized": optimized,
     });
 
     let url = format!(

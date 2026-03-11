@@ -796,12 +796,6 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
                             );
                         }
                     });
-                ui.add_space(8.0);
-                ui.checkbox(&mut app.ors_optimized, "Optimized routing")
-                    .on_hover_text(
-                        "Uses contraction hierarchies for faster routing.\n\
-                         Disable to enable turn restrictions and avoid-polygon features.",
-                    );
             });
 
             ui.separator();

@@ -99,11 +99,6 @@ pub struct MyApp {
     /// `ORS` routing profile (e.g. `"foot-walking"`, `"driving-car"`).
     pub ors_profile: String,
 
-    /// Use contraction hierarchies for faster `ORS` routing.
-    ///
-    /// Disable to unlock turn restrictions and avoid-polygon support.
-    pub ors_optimized: bool,
-
     /// How to obtain the route `GeoJSON` (not persisted).
     #[serde(skip)]
     pub route_source: RouteSource,
@@ -272,7 +267,6 @@ impl Default for MyApp {
             new_waypoint_coord_error: None,
             route_name: String::new(),
             ors_profile: "foot-walking".to_owned(),
-            ors_optimized: true,
             route_source: RouteSource::OrsApi,
             route_geojson_path: None,
             route_geojson_dialog: None,
@@ -404,13 +398,11 @@ impl MyApp {
             return;
         }
         let profile = self.ors_profile.clone();
-        let optimized = self.ors_optimized;
         self.status = AppStatus::Working;
         let tx = self.result_tx.clone();
         self.rt.spawn(async move {
             let result =
-                run_pipeline(route_points, velocity, route_name, api_key, profile, optimized)
-                    .await;
+                run_pipeline(route_points, velocity, route_name, api_key, profile).await;
             tx.send(result).ok();
         });
     }
