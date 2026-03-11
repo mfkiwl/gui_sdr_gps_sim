@@ -193,6 +193,27 @@ pub struct MyApp {
     #[serde(skip)]
     pub sim_frequency: usize,
 
+    /// Scenario start time entered by the user (not persisted).
+    /// Empty string means "use ephemeris start"; "now" means current UTC time.
+    #[serde(skip)]
+    pub sim_start_time: String,
+
+    /// Whether to overwrite TOC/TOE in the ephemeris to the scenario start time (not persisted).
+    #[serde(skip)]
+    pub sim_time_override: bool,
+
+    /// Whether to disable ionospheric delay correction (not persisted).
+    #[serde(skip)]
+    pub sim_ionospheric_disable: bool,
+
+    /// Whether to use a fixed gain instead of distance-based path loss (not persisted).
+    #[serde(skip)]
+    pub sim_fixed_gain_enable: bool,
+
+    /// Fixed gain value used when `sim_fixed_gain_enable` is true (not persisted).
+    #[serde(skip)]
+    pub sim_fixed_gain: i32,
+
     /// Shared simulation state polled by the UI (not persisted).
     #[serde(skip)]
     pub sim_state: std::sync::Arc<std::sync::Mutex<crate::simulator::SimState>>,
@@ -313,6 +334,11 @@ impl Default for MyApp {
             sim_txvga_gain: 20,
             sim_amp_enable: false,
             sim_frequency: 2_600_000,
+            sim_start_time: String::new(),
+            sim_time_override: false,
+            sim_ionospheric_disable: false,
+            sim_fixed_gain_enable: false,
+            sim_fixed_gain: 1000,
             sim_state: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::simulator::SimState::default(),
             )),
@@ -661,6 +687,14 @@ impl MyApp {
             frequency: self.sim_frequency,
             txvga_gain: self.sim_txvga_gain,
             amp_enable: self.sim_amp_enable,
+            start_time: if self.sim_start_time.trim().is_empty() {
+                None
+            } else {
+                Some(self.sim_start_time.trim().to_owned())
+            },
+            time_override: self.sim_time_override,
+            ionospheric_disable: self.sim_ionospheric_disable,
+            fixed_gain: self.sim_fixed_gain_enable.then_some(self.sim_fixed_gain),
         };
         let state = std::sync::Arc::clone(&self.sim_state);
         let stop = std::sync::Arc::clone(&self.sim_stop_flag);

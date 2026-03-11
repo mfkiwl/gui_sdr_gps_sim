@@ -53,6 +53,10 @@ pub fn run(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear pipeline: builder setup, HackRF config, FIFO channel, producer loop, teardown"
+)]
 fn do_run(
     rinex_path: &Path,
     motion_path: &Path,
@@ -61,11 +65,30 @@ fn do_run(
     stop: &Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 1. Build and initialise the signal generator.
+    //
+    // Convert the user-supplied start time from "YYYY/MM/DD,hh:mm:ss" (the
+    // anywhere-sdr CLI format) to RFC 3339 "YYYY-MM-DDThh:mm:ssZ" which jiff
+    // can parse.  "now" and None are passed through unchanged.
+    let start_time = settings.start_time.as_deref().map(|s| {
+        if s.eq_ignore_ascii_case("now") {
+            "now".to_owned()
+        } else {
+            // Convert "YYYY/MM/DD,hh:mm:ss" → "YYYY-MM-DDThh:mm:ssZ" (RFC 3339).
+            let mut iso = s.replace('/', "-").replace(',', "T");
+            iso.push('Z');
+            iso
+        }
+    });
+
     let mut generator = SignalGeneratorBuilder::default()
         .navigation_file(Some(rinex_path.to_path_buf()))?
         .user_motion_file(Some(motion_path.to_path_buf()))?
         .data_format(Some(8))? // 8-bit signed I/Q — HackRF native format
         .frequency(Some(settings.frequency))?
+        .time(start_time)?
+        .time_override(Some(settings.time_override))
+        .ionospheric_disable(Some(settings.ionospheric_disable))
+        .path_loss(settings.fixed_gain)
         .verbose(Some(false))
         .build()?;
 

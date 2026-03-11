@@ -503,6 +503,59 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
 
     ui.add_space(8.0);
 
+    // ── Simulation settings ───────────────────────────────────────────────────
+    let running = app.sim_thread.is_some();
+    ui.add_enabled_ui(!running, |ui| {
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("Simulation Settings").strong());
+            ui.add_space(4.0);
+
+            // Start time
+            ui.horizontal(|ui| {
+                ui.label("Start time:");
+                ui.text_edit_singleline(&mut app.sim_start_time)
+                    .on_hover_text("YYYY/MM/DD,hh:mm:ss  ·  \"now\"  ·  leave empty for ephemeris start");
+                if ui.small_button("Now").clicked() {
+                    app.sim_start_time = "now".to_owned();
+                }
+                if ui.small_button("Clear").clicked() {
+                    app.sim_start_time = String::new();
+                }
+            });
+
+            ui.checkbox(&mut app.sim_time_override, "Overwrite TOC/TOE to start time")
+                .on_hover_text(
+                    "Shifts all ephemeris TOC/TOE values to match the scenario \
+                     start time. Allows using any RINEX file at an arbitrary time.",
+                );
+
+            ui.checkbox(
+                &mut app.sim_ionospheric_disable,
+                "Disable ionospheric delay correction",
+            )
+            .on_hover_text(
+                "Disables the Klobuchar ionospheric model. \
+                 Useful for spacecraft scenarios above the ionosphere.",
+            );
+
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut app.sim_fixed_gain_enable, "Fixed gain (disable path loss):")
+                    .on_hover_text(
+                        "Hold all satellite signals at a constant power level \
+                         instead of computing gain from satellite distance.",
+                    );
+                ui.add_enabled(
+                    app.sim_fixed_gain_enable,
+                    egui::DragValue::new(&mut app.sim_fixed_gain)
+                        .range(1..=10_000)
+                        .speed(10.0),
+                );
+            });
+        });
+    });
+
+    ui.add_space(8.0);
+
     // ── HackRF settings ──────────────────────────────────────────────────────
     let running = app.sim_thread.is_some();
     ui.add_enabled_ui(!running, |ui| {
