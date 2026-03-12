@@ -513,6 +513,9 @@ fn show_central_panel(app: &mut MyApp, ctx: &egui::Context) {
     let current_mode = app.current_mode;
 
     egui::CentralPanel::default().show(ctx, |ui| {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
         match current_mode {
             AppPage::Home => show_home_page(ui),
             AppPage::SdrGpsSimulator => show_sdr_gps_page(app, ui),
@@ -615,6 +618,7 @@ fn show_central_panel(app: &mut MyApp, ctx: &egui::Context) {
                 }
             }
         }
+        }); // ScrollArea
     });
 }
 
