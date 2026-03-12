@@ -14,6 +14,37 @@ use crate::{
 };
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Renders `+`/`-` zoom buttons overlaid in the top-left corner of a map widget.
+///
+/// The buttons are rendered inside a semi-transparent floating [`egui::Area`] so
+/// they stay on top of the map tiles.  `id` must be unique per map instance.
+fn add_map_zoom_controls(
+    ctx: &egui::Context,
+    map_rect: egui::Rect,
+    id: &str,
+    map_memory: &mut walkers::MapMemory,
+) {
+    egui::Area::new(egui::Id::new(id))
+        .fixed_pos(map_rect.min + egui::vec2(8.0, 8.0))
+        .order(egui::Order::Foreground)
+        .interactable(true)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(28.0);
+                if ui.button(" + ").clicked() {
+                    map_memory.zoom_in().unwrap_or_default();
+                }
+                if ui.button(" − ").clicked() {
+                    map_memory.zoom_out().unwrap_or_default();
+                }
+            });
+        });
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
@@ -826,7 +857,8 @@ fn show_map_widget(
     .with_plugin(ClickCapturePlugin { out: map_clicked });
 
     let available_width = ui.available_width();
-    ui.add_sized([available_width, 300.0], map);
+    let map_response = ui.add_sized([available_width, 300.0], map);
+    add_map_zoom_controls(ui.ctx(), map_response.rect, "route_map_zoom", map_memory);
 }
 
 /// Shows a popup anchored to the click position with coordinate assignment buttons.
@@ -1288,7 +1320,8 @@ fn show_wp_map_widget(
     .with_plugin(WaypointMarkerPlugin { markers });
 
     let available_width = ui.available_width();
-    ui.add_sized([available_width, 250.0], map);
+    let map_response = ui.add_sized([available_width, 250.0], map);
+    add_map_zoom_controls(ui.ctx(), map_response.rect, "wp_map_zoom", map_memory);
 }
 
 /// Renders a clickable image header for a sortable table column.
@@ -1605,7 +1638,8 @@ fn show_draw_map_widget(
     .with_plugin(PolylinePlugin { points });
 
     let available_width = ui.available_width();
-    ui.add_sized([available_width, 400.0], map);
+    let map_response = ui.add_sized([available_width, 400.0], map);
+    add_map_zoom_controls(ui.ctx(), map_response.rect, "draw_map_zoom", map_memory);
 }
 
 /// Deferred mutations requested by the route-manager page.
@@ -1652,7 +1686,13 @@ fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> RouteLibraryActions {
     .with_plugin(RouteLinePlugin { points: &points });
 
     let w = ui.available_width();
-    ui.add_sized([w, 300.0], map);
+    let map_response = ui.add_sized([w, 300.0], map);
+    add_map_zoom_controls(
+        ui.ctx(),
+        map_response.rect,
+        "lib_map_zoom",
+        &mut app.lib_map_memory,
+    );
 
     if app.lib_route_points.is_empty() {
         // Overlay a hint when nothing is selected yet.
