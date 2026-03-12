@@ -783,6 +783,28 @@ impl MyApp {
         }
     }
 
+    /// Deletes the `CSV` and `GeoJSON` files for library entry `idx`.
+    ///
+    /// Missing files are silently ignored.  Returns without doing anything if
+    /// `idx` is out of range or the `umf/` directory cannot be resolved.
+    pub fn delete_library_route(&mut self, idx: usize) {
+        let Some(entry) = self.library.get(idx) else {
+            return;
+        };
+        let name = entry.name.clone();
+        let Ok(umf_dir) = crate::paths::umf_dir() else {
+            return;
+        };
+        for ext in ["csv", "geojson"] {
+            let path = umf_dir.join(format!("{name}.{ext}"));
+            if path.exists() {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    log::warn!("Failed to delete {}: {e}", path.display());
+                }
+            }
+        }
+    }
+
     /// Clears `library.json` and rescans `umf/` from scratch.
     ///
     /// Useful after deleting or renaming route files — this rebuilds the

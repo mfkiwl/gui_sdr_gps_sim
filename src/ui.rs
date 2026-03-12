@@ -362,7 +362,18 @@ fn navigate(app: &mut MyApp, new_page: AppPage) {
         app.load_waypoints();
     }
     if new_page == AppPage::ManageUmfRoutes {
-        app.load_library();
+        app.clear_and_rescan_library();
+        // Restore the map preview for the previously selected row (if still valid).
+        if let Some(i) = app.library_selected_row {
+            if let Some(entry) = app.library.get(i) {
+                let name = entry.name.clone();
+                app.load_library_route(&name);
+            } else {
+                // Selected index no longer exists after rescan — clear stale state.
+                app.library_selected_row = None;
+                app.lib_route_points.clear();
+            }
+        }
     }
     app.current_mode = new_page;
 }
@@ -384,6 +395,10 @@ fn nav_image(ui: &mut egui::Ui, src: egui::ImageSource<'_>) -> bool {
 // Central panel — dispatches to the active page
 // ---------------------------------------------------------------------------
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "central panel dispatches to all pages and applies deferred actions for each — splitting further would obscure the control flow"
+)]
 fn show_central_panel(app: &mut MyApp, ctx: &egui::Context) {
     // Copy current_mode (it's Copy) before entering the closure so we can
     // still borrow `app` mutably inside it.
@@ -464,17 +479,20 @@ fn show_central_panel(app: &mut MyApp, ctx: &egui::Context) {
             }
             AppPage::ManageUmfRoutes => {
                 let actions = show_routes_page(app, ui);
-                if actions.scan {
-                    app.scan_library();
-                }
-                if actions.clear_rescan {
-                    app.clear_and_rescan_library();
-                }
                 if let Some(i) = actions.select_row {
                     app.library_selected_row = Some(i);
                     if let Some(entry) = app.library.get(i) {
                         let name = entry.name.clone();
                         app.load_library_route(&name);
+                    }
+                }
+                if let Some(i) = actions.delete_row {
+                    app.delete_library_route(i);
+                    app.clear_and_rescan_library();
+                    // Clear selection/map if the deleted row was selected.
+                    if app.library_selected_row == Some(i) {
+                        app.library_selected_row = None;
+                        app.lib_route_points.clear();
                     }
                 }
                 if let Some(i) = actions.edit_row {
@@ -614,7 +632,8 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
 
     // ── Route library ─────────────────────────────────────────────────────────
-    ui.group(|ui| {
+    let running = app.sim_thread.is_some();
+    ui.add_enabled_ui(!running, |ui| ui.group(|ui| {
         ui.label(egui::RichText::new("Route Library").strong());
         ui.add_space(4.0);
 
@@ -666,7 +685,7 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                 app.load_sim_lib_route(i);
             }
         }
-    });
+    }));
 
     ui.add_space(6.0);
 
@@ -726,7 +745,6 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
 
     // ── Control buttons ──────────────────────────────────────────────────────
-    let running = app.sim_thread.is_some();
     let ready = app.sim_rinex_path.is_some() && app.sim_motion_path.is_some() && !running;
 
     ui.horizontal(|ui| {
@@ -2205,12 +2223,10 @@ fn show_draw_map_widget(
 /// Deferred mutations requested by the route-manager page.
 #[derive(Default)]
 struct RouteLibraryActions {
-    /// Trigger a library scan.
-    scan: bool,
-    /// Clear library.json and rescan umf/ from scratch.
-    clear_rescan: bool,
     /// Row that was clicked (select for preview).
     select_row: Option<usize>,
+    /// Row whose "Delete" button was pressed.
+    delete_row: Option<usize>,
     /// Row whose "Edit" button was pressed.
     edit_row: Option<usize>,
     /// "Done" pressed in the route editor — dismiss editor.
@@ -2219,10 +2235,6 @@ struct RouteLibraryActions {
     open_in_draw: bool,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "two distinct modes (library view and route editor) make this function inherently long"
-)]
 fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> RouteLibraryActions {
     let mut actions = RouteLibraryActions::default();
 
@@ -2305,23 +2317,6 @@ fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> RouteLibraryActions {
     ui.heading("Manage UMF Routes");
     ui.add_space(4.0);
 
-    ui.horizontal(|ui| {
-        if ui
-            .button("Scan library for new routes")
-            .on_hover_text("Scan umf/ for CSV files not yet in library.json")
-            .clicked()
-        {
-            actions.scan = true;
-        }
-        if ui
-            .button("Clear & rescan")
-            .on_hover_text("Clear library.json and rebuild it from all CSV files in umf/")
-            .clicked()
-        {
-            actions.clear_rescan = true;
-        }
-    });
-
     ui.add_space(6.0);
     ui.separator();
 
@@ -2366,7 +2361,7 @@ fn show_library_table(app: &MyApp, ui: &mut egui::Ui, actions: &mut RouteLibrary
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(
-                "No routes in library. Press \"Scan library for new routes\".",
+                "No routes in library. Press \"Rescan Library\" to populate.",
             )
             .weak(),
         );
@@ -2382,6 +2377,7 @@ fn show_library_table(app: &MyApp, ui: &mut egui::Ui, actions: &mut RouteLibrary
                 .column(egui_extras::Column::initial(110.0).at_least(80.0))  // Duration
                 .column(egui_extras::Column::initial(110.0).at_least(80.0))  // Velocity
                 .column(egui_extras::Column::initial(60.0).at_least(50.0))   // Edit
+                .column(egui_extras::Column::initial(60.0).at_least(50.0))   // Delete
                 .sense(egui::Sense::click())
                 .resizable(true)
                 .striped(true)
@@ -2391,6 +2387,7 @@ fn show_library_table(app: &MyApp, ui: &mut egui::Ui, actions: &mut RouteLibrary
                     row.col(|ui| { ui.strong("Duration"); });
                     row.col(|ui| { ui.strong("Velocity"); });
                     row.col(|ui| { ui.strong("Edit"); });
+                    row.col(|ui| { ui.strong("Delete"); });
                 })
                 .body(|mut body| {
                     for (i, entry) in app.library.iter().enumerate() {
@@ -2408,6 +2405,17 @@ fn show_library_table(app: &MyApp, ui: &mut egui::Ui, actions: &mut RouteLibrary
                             row.col(|ui| {
                                 if ui.small_button("Edit").clicked() {
                                     actions.edit_row = Some(i);
+                                }
+                            });
+                            row.col(|ui| {
+                                if ui
+                                    .small_button(
+                                        egui::RichText::new("Delete")
+                                            .color(egui::Color32::from_rgb(200, 60, 60)),
+                                    )
+                                    .clicked()
+                                {
+                                    actions.delete_row = Some(i);
                                 }
                             });
 
