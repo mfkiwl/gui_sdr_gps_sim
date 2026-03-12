@@ -2,6 +2,13 @@
 
 use walkers::{MapMemory, Plugin, Position, Projector};
 
+/// Rectangular size reserved for the zoom control widget in the top-left corner
+/// of the map.
+///
+/// `ClickCapturePlugin` skips clicks that fall inside this area so that pressing
+/// the zoom `+`/`-` buttons does not also register as a map coordinate click.
+pub const ZOOM_WIDGET_EXCLUSION: egui::Vec2 = egui::vec2(52.0, 76.0);
+
 /// The result of a click on the map widget.
 pub struct ClickResult {
     /// Geographic position of the click (`x` = lon, `y` = lat).
@@ -26,6 +33,12 @@ impl Plugin for ClickCapturePlugin<'_> {
     ) {
         if response.clicked_by(egui::PointerButton::Primary) {
             if let Some(screen_pos) = response.interact_pointer_pos() {
+                // Don't capture clicks inside the zoom-button overlay area (top-left corner).
+                let zoom_rect =
+                    egui::Rect::from_min_size(response.rect.min, ZOOM_WIDGET_EXCLUSION);
+                if zoom_rect.contains(screen_pos) {
+                    return;
+                }
                 let position = projector.unproject(screen_pos.to_vec2());
                 *self.out = Some(ClickResult { position, screen_pos });
             }
@@ -48,11 +61,11 @@ impl Plugin for WaypointMarkerPlugin<'_> {
     fn run(
         self: Box<Self>,
         ui: &mut egui::Ui,
-        _response: &egui::Response,
+        response: &egui::Response,
         projector: &Projector,
         _map_memory: &MapMemory,
     ) {
-        let painter = ui.painter();
+        let painter = ui.painter_at(response.rect);
         for (position, color) in self.markers {
             let screen = projector.project(*position);
             let pos = egui::pos2(screen.x, screen.y);
@@ -77,14 +90,14 @@ impl Plugin for RouteLinePlugin<'_> {
     fn run(
         self: Box<Self>,
         ui: &mut egui::Ui,
-        _response: &egui::Response,
+        response: &egui::Response,
         projector: &Projector,
         _map_memory: &MapMemory,
     ) {
         if self.points.is_empty() {
             return;
         }
-        let painter = ui.painter();
+        let painter = ui.painter_at(response.rect);
         let stroke = egui::Stroke::new(3.0, egui::Color32::from_rgb(220, 50, 50));
         let screen_pts: Vec<egui::Pos2> = self
             .points
@@ -118,7 +131,7 @@ impl Plugin for PolylinePlugin<'_> {
     fn run(
         self: Box<Self>,
         ui: &mut egui::Ui,
-        _response: &egui::Response,
+        response: &egui::Response,
         projector: &Projector,
         _map_memory: &MapMemory,
     ) {
@@ -126,7 +139,7 @@ impl Plugin for PolylinePlugin<'_> {
             return;
         }
 
-        let painter = ui.painter();
+        let painter = ui.painter_at(response.rect);
         let stroke = egui::Stroke::new(3.0, egui::Color32::from_rgb(30, 120, 255));
 
         let screen_pts: Vec<egui::Pos2> = self
