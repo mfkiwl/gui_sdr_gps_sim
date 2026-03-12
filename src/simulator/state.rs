@@ -45,6 +45,8 @@ pub struct SimState {
     pub bytes_sent: u64,
     /// Human-readable error message, populated when `status == Error`.
     pub error: Option<String>,
+    /// Number of completed loop passes (static looping simulator only; 0 otherwise).
+    pub loop_count: usize,
 }
 
 /// Run-state of the GPS signal simulation.

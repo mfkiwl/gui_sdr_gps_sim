@@ -9,7 +9,10 @@ use walkers::{HttpTiles, Map, lat_lon, sources::OpenStreetMap};
 
 use crate::{
     app::{AppPage, AppStatus, MyApp, RouteSource, SimTab},
-    map_plugin::{ClickCapturePlugin, PolylinePlugin, RouteLinePlugin, WaypointMarkerPlugin},
+    map_plugin::{
+        ClickCapturePlugin, EditableRoutePlugin, PolylinePlugin, RouteLinePlugin,
+        WaypointMarkerPlugin,
+    },
     waypoint::{Waypoint, WaypointEntry},
 };
 
@@ -49,11 +52,22 @@ fn add_map_zoom_controls(
 // ---------------------------------------------------------------------------
 
 /// Main render entry point — called every frame from `eframe::App::update`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "top-level update polls multiple independent background tasks and then delegates to page renderers"
+)]
 pub fn update(app: &mut MyApp, ctx: &egui::Context) {
     // Poll the background pipeline task for a finished result.
     if let Ok(result) = app.result_rx.try_recv() {
         app.status = match result {
-            Ok(count) => AppStatus::Done(count),
+            Ok(count) => {
+                // A new CSV was written — refresh the route library so the new
+                // entry appears immediately on the ManageUmfRoutes page.
+                app.library_loaded = false;
+                app.load_library();
+                app.scan_library();
+                AppStatus::Done(count)
+            }
             Err(msg) => AppStatus::Error(msg),
         };
     }
@@ -112,6 +126,14 @@ pub fn update(app: &mut MyApp, ctx: &egui::Context) {
         }
     }
 
+    // Poll static simulator file-dialog result.
+    if let Some(rx) = &app.sim_static_rinex_dialog {
+        if let Ok(path) = rx.try_recv() {
+            app.sim_static_rinex_path = path;
+            app.sim_static_rinex_dialog = None;
+        }
+    }
+
     // Keep repainting while any file-dialog is open so the result is picked
     // up immediately when the OS dialog closes (egui receives no input events
     // while a native dialog has focus).
@@ -119,6 +141,7 @@ pub fn update(app: &mut MyApp, ctx: &egui::Context) {
         || app.sim_motion_dialog.is_some()
         || app.route_geojson_dialog.is_some()
         || app.draw_import_dialog.is_some()
+        || app.sim_static_rinex_dialog.is_some()
     {
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
@@ -160,6 +183,48 @@ pub fn update(app: &mut MyApp, ctx: &egui::Context) {
         Err(_) => false,
     };
     if is_sim_running {
+        ctx.request_repaint_after(std::time::Duration::from_millis(150));
+    }
+
+    // ── Static GPS Simulator bookkeeping ─────────────────────────────────────
+
+    // Poll a pending RINEX download for the static simulator.
+    if let Some(rx) = &app.sim_static_rinex_download {
+        if let Ok(result) = rx.try_recv() {
+            match result {
+                Ok(path) => {
+                    app.sim_static_rinex_path = Some(path);
+                    app.sim_static_rinex_dl_error = None;
+                }
+                Err(e) => {
+                    app.sim_static_rinex_dl_error = Some(e);
+                }
+            }
+            app.sim_static_rinex_download = None;
+        }
+    }
+    if app.sim_static_rinex_download.is_some() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+    }
+
+    // Clean up a finished static simulation thread.
+    if app
+        .sim_static_thread
+        .as_ref()
+        .map(|h| h.is_finished())
+        .unwrap_or(false)
+    {
+        if let Some(h) = app.sim_static_thread.take() {
+            h.join().ok();
+        }
+    }
+
+    // Keep repainting while the static simulation is running.
+    let is_static_sim_running = match app.sim_static_state.lock() {
+        Ok(s) => s.status == crate::simulator::SimStatus::Running,
+        Err(_) => false,
+    };
+    if is_static_sim_running {
         ctx.request_repaint_after(std::time::Duration::from_millis(150));
     }
 
@@ -402,12 +467,25 @@ fn show_central_panel(app: &mut MyApp, ctx: &egui::Context) {
                 if actions.scan {
                     app.scan_library();
                 }
+                if actions.clear_rescan {
+                    app.clear_and_rescan_library();
+                }
                 if let Some(i) = actions.select_row {
                     app.library_selected_row = Some(i);
                     if let Some(entry) = app.library.get(i) {
                         let name = entry.name.clone();
                         app.load_library_route(&name);
                     }
+                }
+                if let Some(i) = actions.edit_row {
+                    app.load_lib_edit_route(i);
+                }
+                if actions.done_editing {
+                    app.lib_edit_entry_idx = None;
+                }
+                if actions.open_in_draw {
+                    app.open_lib_edit_in_draw_route();
+                    app.current_mode = AppPage::CreateUmfRoute;
                 }
             }
         }
@@ -434,21 +512,26 @@ fn show_sdr_gps_page(app: &mut MyApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.selectable_value(&mut app.sim_tab, SimTab::Dynamic, "Dynamic Mode");
         ui.selectable_value(&mut app.sim_tab, SimTab::Static, "Static Mode");
+        ui.selectable_value(&mut app.sim_tab, SimTab::Settings, "Settings");
     });
     ui.separator();
 
     match app.sim_tab {
         SimTab::Dynamic => show_sim_dynamic_tab(app, ui),
-        SimTab::Static => show_sim_static_tab(ui),
+        SimTab::Static => show_sim_static_tab(app, ui),
+        SimTab::Settings => show_sim_settings_tab(app, ui),
     }
 }
 
 #[expect(
     clippy::too_many_lines,
-    reason = "GPS simulator dynamic tab with four grouped sections (files, settings, controls, status) is inherently long"
+    reason = "dynamic tab: RINEX file group, route library table, map preview with live position, control buttons, and status panel"
 )]
 fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
     use std::sync::atomic::Ordering;
+
+    // Ensure the library is loaded (no-op after first call).
+    app.load_library();
 
     ui.add_space(4.0);
 
@@ -484,11 +567,7 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                 {
                     open_browse = true;
                 }
-                let dl_label = if downloading {
-                    "⏳"
-                } else {
-                    "⬇ Download Latest"
-                };
+                let dl_label = if downloading { "⏳" } else { "⬇ Download Latest" };
                 if ui
                     .add_enabled(!downloading, egui::Button::new(dl_label))
                     .on_hover_text(crate::rinex::today_rinex_filename())
@@ -532,159 +611,122 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
         }
     });
 
-    ui.add_space(8.0);
+    ui.add_space(6.0);
 
-    // ── Simulation settings ───────────────────────────────────────────────────
-    let running = app.sim_thread.is_some();
-    ui.add_enabled_ui(!running, |ui| {
-        ui.group(|ui| {
-            ui.label(egui::RichText::new("Simulation Settings").strong());
-            ui.add_space(4.0);
+    // ── Route library ─────────────────────────────────────────────────────────
+    ui.group(|ui| {
+        ui.label(egui::RichText::new("Route Library").strong());
+        ui.add_space(4.0);
 
-            // Start time
-            ui.horizontal(|ui| {
-                ui.label("Start time:");
-                ui.text_edit_singleline(&mut app.sim_start_time)
-                    .on_hover_text("YYYY/MM/DD,hh:mm:ss  ·  \"now\"  ·  leave empty for ephemeris start");
-                if ui.small_button("Now").clicked() {
-                    app.sim_start_time = "now".to_owned();
-                }
-                if ui.small_button("Clear").clicked() {
-                    app.sim_start_time = String::new();
-                }
-            });
+        if app.library.is_empty() {
+            ui.label(egui::RichText::new("No routes in library. Go to Manage UMF Routes to scan.").weak());
+        } else {
+            let mut route_to_load: Option<usize> = None;
 
-            ui.checkbox(&mut app.sim_time_override, "Overwrite TOC/TOE to start time")
-                .on_hover_text(
-                    "Shifts all ephemeris TOC/TOE values to match the scenario \
-                     start time. Allows using any RINEX file at an arbitrary time.",
-                );
+            egui::ScrollArea::vertical()
+                .id_salt("sim_dyn_lib_scroll")
+                .max_height(160.0)
+                .show(ui, |ui| {
+                    egui_extras::TableBuilder::new(ui)
+                        .column(Column::initial(160.0).at_least(100.0)) // Name
+                        .column(Column::initial(90.0).at_least(70.0))   // Distance
+                        .column(Column::initial(90.0).at_least(70.0))   // Duration
+                        .column(Column::initial(90.0).at_least(70.0))   // Velocity
+                        .sense(egui::Sense::click())
+                        .resizable(true)
+                        .striped(true)
+                        .header(22.0, |mut row| {
+                            row.col(|ui| { ui.strong("Route Name"); });
+                            row.col(|ui| { ui.strong("Distance"); });
+                            row.col(|ui| { ui.strong("Duration"); });
+                            row.col(|ui| { ui.strong("Velocity"); });
+                        })
+                        .body(|mut body| {
+                            for (i, entry) in app.library.iter().enumerate() {
+                                body.row(22.0, |mut row| {
+                                    row.set_selected(app.sim_lib_selected_row == Some(i));
+                                    row.col(|ui| { ui.label(&entry.name); });
+                                    row.col(|ui| {
+                                        ui.label(format!("{:.2} km", entry.distance_m / 1000.0));
+                                    });
+                                    row.col(|ui| { ui.label(format_duration(entry.duration_s)); });
+                                    row.col(|ui| {
+                                        ui.label(format!("{:.1} km/h", entry.velocity_kmh));
+                                    });
+                                    if row.response().clicked() {
+                                        route_to_load = Some(i);
+                                    }
+                                });
+                            }
+                        });
+                });
 
-            ui.checkbox(
-                &mut app.sim_ionospheric_disable,
-                "Disable ionospheric delay correction",
-            )
-            .on_hover_text(
-                "Disables the Klobuchar ionospheric model. \
-                 Useful for spacecraft scenarios above the ionosphere.",
-            );
-
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut app.sim_fixed_gain_enable, "Fixed gain (disable path loss):")
-                    .on_hover_text(
-                        "Hold all satellite signals at a constant power level \
-                         instead of computing gain from satellite distance.",
-                    );
-                ui.add_enabled(
-                    app.sim_fixed_gain_enable,
-                    egui::DragValue::new(&mut app.sim_fixed_gain)
-                        .range(1..=10_000)
-                        .speed(10.0),
-                );
-            });
-
-            ui.add_space(4.0);
-            ui.separator();
-            ui.add_space(4.0);
-
-            // Centre frequency
-            ui.horizontal(|ui| {
-                ui.label("Centre frequency:");
-                ui.add(
-                    egui::DragValue::new(&mut app.sim_center_freq)
-                        .range(1_u64..=6_000_000_000_u64)
-                        .speed(100_000.0)
-                        .suffix(" Hz"),
-                )
-                .on_hover_text("RF centre frequency transmitted by the HackRF. Default: 1 575 420 000 Hz (GPS L1 C/A).");
-                if ui.small_button("L1").clicked() {
-                    app.sim_center_freq = crate::simulator::GPS_L1_HZ;
-                }
-            });
-
-            // Baseband filter
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut app.sim_baseband_filter_enable, "Baseband filter:")
-                    .on_hover_text(
-                        "Override the baseband filter bandwidth. \
-                         When unchecked, set_sample_rate_auto sets this automatically.",
-                    );
-                ui.add_enabled(
-                    app.sim_baseband_filter_enable,
-                    egui::DragValue::new(&mut app.sim_baseband_filter)
-                        .range(1_750_000_u32..=28_000_000_u32)
-                        .speed(250_000.0)
-                        .suffix(" Hz"),
-                );
-            });
-
-            // Leap second override
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut app.sim_leap_enable, "Override leap seconds:")
-                    .on_hover_text(
-                        "Override the GPS leap second parameters from the RINEX file.",
-                    );
-                ui.add_enabled(
-                    app.sim_leap_enable,
-                    egui::DragValue::new(&mut app.sim_leap_week)
-                        .range(0_i32..=9999_i32)
-                        .prefix("week "),
-                )
-                .on_hover_text("GPS week number when the leap second is effective.");
-                ui.add_enabled(
-                    app.sim_leap_enable,
-                    egui::DragValue::new(&mut app.sim_leap_day)
-                        .range(1_i32..=7_i32)
-                        .prefix("day "),
-                )
-                .on_hover_text("Day of week (1 = Sunday … 7 = Saturday).");
-                ui.add_enabled(
-                    app.sim_leap_enable,
-                    egui::DragValue::new(&mut app.sim_leap_delta)
-                        .range(-128_i32..=127_i32)
-                        .suffix(" s"),
-                )
-                .on_hover_text("Delta leap seconds: current GPS − UTC offset in whole seconds.");
-            });
-        });
+            if let Some(i) = route_to_load {
+                app.sim_lib_selected_row = Some(i);
+                app.load_sim_lib_route(i);
+            }
+        }
     });
 
-    ui.add_space(8.0);
+    ui.add_space(6.0);
 
-    // ── HackRF settings ──────────────────────────────────────────────────────
-    let running = app.sim_thread.is_some();
-    ui.add_enabled_ui(!running, |ui| {
-        ui.group(|ui| {
-            ui.label(egui::RichText::new("HackRF Settings").strong());
-            ui.add_space(4.0);
+    // ── Route preview / live-tracking map ─────────────────────────────────────
+    if !app.sim_lib_route_points.is_empty() {
+        let state = match app.sim_state.lock() {
+            Ok(g) => g.clone(),
+            Err(_) => crate::simulator::SimState::default(),
+        };
+        let running = app.sim_thread.is_some()
+            || state.status == crate::simulator::SimStatus::Running;
 
-            ui.horizontal(|ui| {
-                ui.label("TX VGA Gain:");
-                ui.add(egui::Slider::new(&mut app.sim_txvga_gain, 0..=47).suffix(" dB"));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Sample Rate:");
-                ui.add(
-                    egui::Slider::new(&mut app.sim_frequency, 1_000_000..=20_000_000)
-                        .suffix(" Hz")
-                        .step_by(100_000.0),
-                );
-            });
-            ui.checkbox(&mut app.sim_amp_enable, "Enable RF Amplifier");
-            ui.label(
-                egui::RichText::new(
-                    "⚠ Transmitting GPS signals may be illegal. \
-                     Use only in a shielded environment.",
-                )
-                .small()
-                .color(egui::Color32::YELLOW),
-            );
-        });
-    });
+        // Compute the current geographic position from simulation progress.
+        let current_pos: Option<walkers::Position> = if running || state.total_steps > 0 {
+            interpolate_route_pos(&app.sim_lib_route_points, state.current_step, state.total_steps)
+        } else {
+            None
+        };
 
-    ui.add_space(8.0);
+        // While running, keep the map centred on the moving marker.
+        if running {
+            if let Some(pos) = current_pos {
+                app.sim_lib_map_memory.center_at(pos);
+            }
+        }
+
+        if app.sim_lib_map_tiles.is_none() {
+            app.sim_lib_map_tiles = Some(HttpTiles::new(OpenStreetMap, ui.ctx().clone()));
+        }
+
+        let route_pts: Vec<walkers::Position> = app.sim_lib_route_points.clone();
+        let marker_pts: Vec<(walkers::Position, egui::Color32)> = current_pos
+            .map(|p| vec![(p, egui::Color32::from_rgb(0, 180, 255))])
+            .unwrap_or_default();
+
+        let map = Map::new(
+            app.sim_lib_map_tiles.as_mut().map(|t| t as &mut dyn walkers::Tiles),
+            &mut app.sim_lib_map_memory,
+            app.sim_lib_route_points
+                .first()
+                .copied()
+                .unwrap_or_else(|| lat_lon(52.37308687621991, 4.893432625781817)),
+        )
+        .with_plugin(RouteLinePlugin { points: &route_pts })
+        .with_plugin(WaypointMarkerPlugin { markers: &marker_pts });
+
+        let w = ui.available_width();
+        let map_response = ui.add_sized([w, 260.0], map);
+        add_map_zoom_controls(
+            ui.ctx(),
+            map_response.rect,
+            "sim_dyn_map_zoom",
+            &mut app.sim_lib_map_memory,
+        );
+    }
+
+    ui.add_space(6.0);
 
     // ── Control buttons ──────────────────────────────────────────────────────
+    let running = app.sim_thread.is_some();
     let ready = app.sim_rinex_path.is_some() && app.sim_motion_path.is_some() && !running;
 
     ui.horizontal(|ui| {
@@ -754,9 +796,527 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
     });
 }
 
-fn show_sim_static_tab(ui: &mut egui::Ui) {
+/// Linearly interpolates along `points` based on `current_step / total_steps`.
+///
+/// Returns `None` when `points` is empty or `total_steps` is zero.
+fn interpolate_route_pos(
+    points: &[walkers::Position],
+    current_step: usize,
+    total_steps: usize,
+) -> Option<walkers::Position> {
+    if points.is_empty() || total_steps == 0 {
+        return None;
+    }
+    if points.len() == 1 {
+        return points.first().copied();
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "step counts are small enough that f32 precision is sufficient for map display"
+    )]
+    let t = (current_step as f32 / total_steps as f32).clamp(0.0, 1.0)
+        * (points.len() - 1) as f32;
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "t is clamped to [0, len-2], so the cast is safe"
+    )]
+    let i = (t as usize).min(points.len() - 2);
+    let (Some(a), Some(b)) = (points.get(i), points.get(i + 1)) else {
+        return points.last().copied();
+    };
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "index is small; cast to f64 for coordinate arithmetic is fine"
+    )]
+    let frac = (t - i as f32) as f64;
+    Some(lat_lon(
+        a.y() + (b.y() - a.y()) * frac,
+        a.x() + (b.x() - a.x()) * frac,
+    ))
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "static tab: RINEX file group, waypoint picker, map, position group, control buttons, and status panel"
+)]
+fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
+    use std::sync::atomic::Ordering;
+
     ui.add_space(4.0);
-    ui.label(egui::RichText::new("Static Mode — coming soon.").weak());
+
+    // ── RINEX nav file ────────────────────────────────────────────────────────
+    ui.group(|ui| {
+        ui.label(egui::RichText::new("Input File").strong());
+        ui.add_space(4.0);
+
+        let downloading = app.sim_static_rinex_download.is_some();
+        let mut open_browse = false;
+        let mut start_download = false;
+
+        ui.horizontal(|ui| {
+            ui.label("RINEX Nav File:");
+            let display = app
+                .sim_static_rinex_path
+                .as_deref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "None selected".to_owned());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let browse_label = if app.sim_static_rinex_dialog.is_some() {
+                    "…"
+                } else {
+                    "Browse…"
+                };
+                if ui
+                    .add_enabled(
+                        app.sim_static_rinex_dialog.is_none(),
+                        egui::Button::new(browse_label),
+                    )
+                    .clicked()
+                {
+                    open_browse = true;
+                }
+                let dl_label = if downloading { "⏳" } else { "⬇ Download Latest" };
+                if ui
+                    .add_enabled(!downloading, egui::Button::new(dl_label))
+                    .on_hover_text(crate::rinex::today_rinex_filename())
+                    .clicked()
+                {
+                    start_download = true;
+                }
+                ui.label(egui::RichText::new(display).monospace().weak());
+            });
+        });
+        if open_browse {
+            app.sim_static_rinex_dialog = Some(crate::simulator::open_file_dialog(
+                "Select RINEX Navigation File",
+                &[(
+                    "RINEX Navigation",
+                    &["nav", "n", "22n", "23n", "24n", "25n", "26n", "27n"],
+                )],
+                crate::rinex::rinex_dir().ok(),
+            ));
+        }
+        if start_download {
+            app.download_rinex_static();
+        }
+        if let Some(err) = &app.sim_static_rinex_dl_error.clone() {
+            ui.label(egui::RichText::new(err).color(egui::Color32::RED).small());
+        }
+    });
+
+    ui.add_space(8.0);
+
+    // ── Waypoint picker ───────────────────────────────────────────────────────
+    // Lazily load waypoints (safe to call repeatedly; guard is inside load_waypoints).
+    if !app.waypoints_loaded {
+        app.load_waypoints();
+    }
+
+    // Snapshot to avoid borrow conflicts inside egui closures.
+    let waypoints_snap: Vec<crate::waypoint::Waypoint> = app.waypoints.clone();
+    let current_selected = app.sim_static_wp_selected_row;
+    let mut new_selected: Option<usize> = None;
+
+    ui.group(|ui| {
+        ui.label(egui::RichText::new("Select from Waypoints").strong());
+        ui.add_space(4.0);
+
+        egui::ScrollArea::vertical()
+            .id_salt("sim_static_wp_scroll")
+            .max_height(180.0)
+            .show(ui, |ui| {
+                egui_extras::TableBuilder::new(ui)
+                    .column(Column::initial(160.0).at_least(80.0)) // Name
+                    .column(Column::initial(160.0).at_least(80.0)) // Location
+                    .column(Column::initial(130.0).at_least(80.0)) // Category
+                    .sense(egui::Sense::click())
+                    .resizable(true)
+                    .striped(true)
+                    .header(24.0, |mut row| {
+                        row.col(|ui| {
+                            ui.strong("Name");
+                        });
+                        row.col(|ui| {
+                            ui.strong("Location");
+                        });
+                        row.col(|ui| {
+                            ui.strong("Category");
+                        });
+                    })
+                    .body(|mut body| {
+                        for (idx, wp) in waypoints_snap.iter().enumerate() {
+                            body.row(22.0, |mut row| {
+                                row.set_selected(current_selected == Some(idx));
+                                row.col(|ui| {
+                                    ui.label(&wp.name);
+                                });
+                                row.col(|ui| {
+                                    ui.label(&wp.location);
+                                });
+                                row.col(|ui| {
+                                    ui.label(&wp.category);
+                                });
+                                if row.response().clicked() {
+                                    new_selected = Some(idx);
+                                }
+                            });
+                        }
+                    });
+            });
+    });
+
+    // Apply row selection: fill position fields and centre the map.
+    if let Some(idx) = new_selected {
+        if let Some(wp) = waypoints_snap.get(idx) {
+            app.sim_static_wp_selected_row = Some(idx);
+            app.sim_static_lat = format!("{:.6}", wp.lat);
+            app.sim_static_lon = format!("{:.6}", wp.lon);
+            app.sim_static_map_memory.center_at(lat_lon(wp.lat, wp.lon));
+        }
+    }
+
+    ui.add_space(4.0);
+
+    // ── Waypoint map ──────────────────────────────────────────────────────────
+    if app.sim_static_map_tiles.is_none() {
+        app.sim_static_map_tiles = Some(HttpTiles::new(OpenStreetMap, ui.ctx().clone()));
+    }
+
+    let marker: Vec<(walkers::Position, egui::Color32)> =
+        app.sim_static_wp_selected_row
+            .and_then(|i| waypoints_snap.get(i))
+            .map(|wp| vec![(lat_lon(wp.lat, wp.lon), egui::Color32::from_rgb(70, 150, 255))])
+            .unwrap_or_default();
+
+    let my_pos = lat_lon(52.373_086_876_219_91, 4.893_432_625_781_817); // Amsterdam fallback
+    let sim_static_map = Map::new(
+        app.sim_static_map_tiles.as_mut().map(|t| t as &mut dyn walkers::Tiles),
+        &mut app.sim_static_map_memory,
+        my_pos,
+    )
+    .with_plugin(ClickCapturePlugin {
+        out: &mut app.sim_static_map_clicked,
+    })
+    .with_plugin(WaypointMarkerPlugin { markers: &marker });
+
+    let available_width = ui.available_width();
+    let map_resp = ui.add_sized([available_width, 250.0], sim_static_map);
+    add_map_zoom_controls(
+        ui.ctx(),
+        map_resp.rect,
+        "sim_static_map_zoom",
+        &mut app.sim_static_map_memory,
+    );
+
+    // A click on the map fills the position fields (deselects table row).
+    if let Some(click) = app.sim_static_map_clicked.take() {
+        app.sim_static_lat = format!("{:.6}", click.position.y());
+        app.sim_static_lon = format!("{:.6}", click.position.x());
+        app.sim_static_wp_selected_row = None;
+    }
+
+    ui.add_space(8.0);
+
+    // ── Static position ───────────────────────────────────────────────────────
+    let running = app.sim_static_thread.is_some();
+    ui.add_enabled_ui(!running, |ui| {
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("Static Position").strong());
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                ui.label("Latitude (°): ");
+                ui.text_edit_singleline(&mut app.sim_static_lat)
+                    .on_hover_text("WGS-84 latitude in decimal degrees, e.g. 52.3702");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Longitude (°):");
+                ui.text_edit_singleline(&mut app.sim_static_lon)
+                    .on_hover_text("WGS-84 longitude in decimal degrees, e.g. 4.8952");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Altitude (m): ");
+                ui.text_edit_singleline(&mut app.sim_static_alt)
+                    .on_hover_text("Height above WGS-84 ellipsoid in metres");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Loop duration:");
+                ui.add(
+                    egui::DragValue::new(&mut app.sim_static_loop_duration)
+                        .range(30.0..=3600.0)
+                        .speed(10.0)
+                        .suffix(" s"),
+                )
+                .on_hover_text(
+                    "Duration of each simulation pass before the loop restarts.\n\
+                     GPS receivers need ≥ 30 s to acquire a signal.\n\
+                     Recommended: ≥ 300 s.",
+                );
+            });
+        });
+    });
+
+    ui.add_space(8.0);
+
+    // ── Control buttons ───────────────────────────────────────────────────────
+    let lat_ok = !app.sim_static_lat.trim().is_empty()
+        && app.sim_static_lat.trim().parse::<f64>().is_ok();
+    let lon_ok = !app.sim_static_lon.trim().is_empty()
+        && app.sim_static_lon.trim().parse::<f64>().is_ok();
+    let ready = app.sim_static_rinex_path.is_some() && lat_ok && lon_ok && !running;
+
+    ui.horizontal(|ui| {
+        ui.add_enabled_ui(ready, |ui| {
+            if ui
+                .button(egui::RichText::new("  ▶  Start Loop  ").size(15.0))
+                .on_hover_text(
+                    "Streams the static position indefinitely, restarting every loop pass.",
+                )
+                .clicked()
+            {
+                app.start_static_simulation();
+            }
+        });
+
+        if running
+            && ui
+                .button(egui::RichText::new("  ■  Stop  ").size(15.0))
+                .clicked()
+        {
+            app.sim_static_stop_flag.store(true, Ordering::Relaxed);
+        }
+    });
+
+    if !lat_ok || !lon_ok {
+        ui.label(
+            egui::RichText::new("Enter a valid latitude and longitude to enable start.")
+                .small()
+                .color(egui::Color32::YELLOW),
+        );
+    }
+
+    ui.add_space(8.0);
+
+    // ── Status panel ──────────────────────────────────────────────────────────
+    ui.group(|ui| {
+        ui.label(egui::RichText::new("Status").strong());
+        ui.add_space(4.0);
+
+        let state = match app.sim_static_state.lock() {
+            Ok(guard) => guard.clone(),
+            Err(_) => crate::simulator::SimState::default(),
+        };
+
+        let (status_text, status_colour) = match &state.status {
+            crate::simulator::SimStatus::Idle => ("Idle", egui::Color32::GRAY),
+            crate::simulator::SimStatus::Running => ("Running (looping)…", egui::Color32::GREEN),
+            crate::simulator::SimStatus::Done => ("Done", egui::Color32::LIGHT_BLUE),
+            crate::simulator::SimStatus::Stopped => ("Stopped by user", egui::Color32::GOLD),
+            crate::simulator::SimStatus::Error => ("Error", egui::Color32::RED),
+        };
+        ui.label(egui::RichText::new(status_text).color(status_colour));
+
+        if state.loop_count > 0 {
+            ui.label(format!("Loop pass: {}", state.loop_count));
+        }
+
+        if let Some(err) = &state.error {
+            ui.colored_label(egui::Color32::RED, err);
+        }
+
+        let progress = if state.total_steps > 0 {
+            state.current_step as f32 / state.total_steps as f32
+        } else {
+            0.0
+        };
+        ui.add(
+            egui::ProgressBar::new(progress)
+                .text(format!(
+                    "{:.0}%  ({:.1} s / {:.1} s)",
+                    progress * 100.0,
+                    state.current_step as f64 / 10.0,
+                    state.total_steps as f64 / 10.0,
+                ))
+                .desired_width(500.0),
+        );
+
+        ui.label(format!(
+            "Bytes transmitted: {:.2} MB",
+            state.bytes_sent as f64 / 1_000_000.0
+        ));
+    });
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "settings tab: simulation-settings group and HackRF-settings group shared by both simulators"
+)]
+fn show_sim_settings_tab(app: &mut MyApp, ui: &mut egui::Ui) {
+    // Settings are locked while either simulator is running.
+    let either_running = app.sim_thread.is_some() || app.sim_static_thread.is_some();
+
+    ui.add_space(4.0);
+
+    // ── Simulation settings ───────────────────────────────────────────────────
+    ui.add_enabled_ui(!either_running, |ui| {
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("Simulation Settings").strong());
+            ui.label(
+                egui::RichText::new("Shared by Dynamic Mode and Static Mode.")
+                    .small()
+                    .weak(),
+            );
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                ui.label("Start time:");
+                ui.text_edit_singleline(&mut app.sim_start_time).on_hover_text(
+                    "YYYY/MM/DD,hh:mm:ss  ·  \"now\"  ·  leave empty for ephemeris start",
+                );
+                if ui.small_button("Now").clicked() {
+                    app.sim_start_time = "now".to_owned();
+                }
+                if ui.small_button("Clear").clicked() {
+                    app.sim_start_time = String::new();
+                }
+            });
+
+            ui.checkbox(&mut app.sim_time_override, "Overwrite TOC/TOE to start time")
+                .on_hover_text(
+                    "Shifts all ephemeris TOC/TOE values to match the scenario \
+                     start time. Allows using any RINEX file at an arbitrary time.",
+                );
+
+            ui.checkbox(
+                &mut app.sim_ionospheric_disable,
+                "Disable ionospheric delay correction",
+            )
+            .on_hover_text(
+                "Disables the Klobuchar ionospheric model. \
+                 Useful for spacecraft scenarios above the ionosphere.",
+            );
+
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut app.sim_fixed_gain_enable, "Fixed gain (disable path loss):")
+                    .on_hover_text(
+                        "Hold all satellite signals at a constant power level \
+                         instead of computing gain from satellite distance.",
+                    );
+                ui.add_enabled(
+                    app.sim_fixed_gain_enable,
+                    egui::DragValue::new(&mut app.sim_fixed_gain)
+                        .range(1..=10_000)
+                        .speed(10.0),
+                );
+            });
+
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut app.sim_leap_enable, "Override leap seconds:")
+                    .on_hover_text(
+                        "Override the GPS leap second parameters from the RINEX file.",
+                    );
+                ui.add_enabled(
+                    app.sim_leap_enable,
+                    egui::DragValue::new(&mut app.sim_leap_week)
+                        .range(0_i32..=9999_i32)
+                        .prefix("week "),
+                )
+                .on_hover_text("GPS week number when the leap second is effective.");
+                ui.add_enabled(
+                    app.sim_leap_enable,
+                    egui::DragValue::new(&mut app.sim_leap_day)
+                        .range(1_i32..=7_i32)
+                        .prefix("day "),
+                )
+                .on_hover_text("Day of week (1 = Sunday … 7 = Saturday).");
+                ui.add_enabled(
+                    app.sim_leap_enable,
+                    egui::DragValue::new(&mut app.sim_leap_delta)
+                        .range(-128_i32..=127_i32)
+                        .suffix(" s"),
+                )
+                .on_hover_text("Delta leap seconds: current GPS − UTC offset in whole seconds.");
+            });
+        });
+    });
+
+    ui.add_space(8.0);
+
+    // ── HackRF settings ───────────────────────────────────────────────────────
+    ui.add_enabled_ui(!either_running, |ui| {
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("HackRF Settings").strong());
+            ui.label(
+                egui::RichText::new("Shared by Dynamic Mode and Static Mode.")
+                    .small()
+                    .weak(),
+            );
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                ui.label("TX VGA Gain:");
+                ui.add(egui::Slider::new(&mut app.sim_txvga_gain, 0..=47).suffix(" dB"));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Sample Rate:");
+                ui.add(
+                    egui::Slider::new(&mut app.sim_frequency, 1_000_000..=20_000_000)
+                        .suffix(" Hz")
+                        .step_by(100_000.0),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Centre frequency:");
+                ui.add(
+                    egui::DragValue::new(&mut app.sim_center_freq)
+                        .range(1_u64..=6_000_000_000_u64)
+                        .speed(100_000.0)
+                        .suffix(" Hz"),
+                )
+                .on_hover_text(
+                    "RF centre frequency transmitted by the HackRF. \
+                     Default: 1 575 420 000 Hz (GPS L1 C/A).",
+                );
+                if ui.small_button("L1").clicked() {
+                    app.sim_center_freq = crate::simulator::GPS_L1_HZ;
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut app.sim_baseband_filter_enable, "Baseband filter:")
+                    .on_hover_text(
+                        "Override the baseband filter bandwidth. \
+                         When unchecked, set_sample_rate_auto sets this automatically.",
+                    );
+                ui.add_enabled(
+                    app.sim_baseband_filter_enable,
+                    egui::DragValue::new(&mut app.sim_baseband_filter)
+                        .range(1_750_000_u32..=28_000_000_u32)
+                        .speed(250_000.0)
+                        .suffix(" Hz"),
+                );
+            });
+            ui.checkbox(&mut app.sim_amp_enable, "Enable RF Amplifier");
+            ui.label(
+                egui::RichText::new(
+                    "⚠ Transmitting GPS signals may be illegal. \
+                     Use only in a shielded environment.",
+                )
+                .small()
+                .color(egui::Color32::YELLOW),
+            );
+        });
+    });
+
+    if either_running {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("Settings are locked while a simulation is running.")
+                .small()
+                .color(egui::Color32::GOLD),
+        );
+    }
 }
 
 /// Renders a file-selection row with a label, the selected filename, and a
@@ -1647,23 +2207,120 @@ fn show_draw_map_widget(
 struct RouteLibraryActions {
     /// Trigger a library scan.
     scan: bool,
-    /// Row that was clicked.
+    /// Clear library.json and rescan umf/ from scratch.
+    clear_rescan: bool,
+    /// Row that was clicked (select for preview).
     select_row: Option<usize>,
+    /// Row whose "Edit" button was pressed.
+    edit_row: Option<usize>,
+    /// "Done" pressed in the route editor — dismiss editor.
+    done_editing: bool,
+    /// "Open in Draw Route" pressed — transfer edited route and navigate.
+    open_in_draw: bool,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "two distinct modes (library view and route editor) make this function inherently long"
+)]
 fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> RouteLibraryActions {
     let mut actions = RouteLibraryActions::default();
 
+    // ── Edit mode ─────────────────────────────────────────────────────────────
+    if let Some(idx) = app.lib_edit_entry_idx {
+        let route_name = app
+            .library
+            .get(idx)
+            .map(|e| e.name.clone())
+            .unwrap_or_default();
+
+        ui.heading(format!("Edit Route: {route_name}"));
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(
+                "Drag vertices to reposition them.  Click on the map to add a point at the end.",
+            )
+            .weak(),
+        );
+
+        let n = app.lib_edit_points.len();
+        ui.label(format!("{n} point{}", if n == 1 { "" } else { "s" }));
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui.button("Done").clicked() {
+                actions.done_editing = true;
+            }
+            if ui
+                .add_enabled(n >= 2, egui::Button::new("Open in Draw Route"))
+                .on_hover_text(
+                    "Transfer the edited route to Create UMF Route → Draw route",
+                )
+                .clicked()
+            {
+                actions.open_in_draw = true;
+            }
+        });
+
+        ui.add_space(4.0);
+        ui.separator();
+
+        // ── Editable map ──────────────────────────────────────────────────
+        if app.lib_edit_map_tiles.is_none() {
+            app.lib_edit_map_tiles =
+                Some(HttpTiles::new(OpenStreetMap, ui.ctx().clone()));
+        }
+
+        let center = app
+            .lib_edit_points
+            .first()
+            .copied()
+            .unwrap_or_else(|| lat_lon(52.37308687621991, 4.893432625781817));
+
+        // Borrow three disjoint fields of `app` simultaneously.
+        let map = Map::new(
+            app.lib_edit_map_tiles
+                .as_mut()
+                .map(|t| t as &mut dyn walkers::Tiles),
+            &mut app.lib_edit_map_memory,
+            center,
+        )
+        .with_plugin(EditableRoutePlugin {
+            points: &mut app.lib_edit_points,
+        });
+
+        let w = ui.available_width();
+        let map_response = ui.add_sized([w, 420.0], map);
+        add_map_zoom_controls(
+            ui.ctx(),
+            map_response.rect,
+            "lib_edit_map_zoom",
+            &mut app.lib_edit_map_memory,
+        );
+
+        return actions;
+    }
+
+    // ── Normal library view ───────────────────────────────────────────────────
     ui.heading("Manage UMF Routes");
     ui.add_space(4.0);
 
-    if ui
-        .button("Scan library for new routes")
-        .on_hover_text("Scan umf/ for CSV files not yet in library.json")
-        .clicked()
-    {
-        actions.scan = true;
-    }
+    ui.horizontal(|ui| {
+        if ui
+            .button("Scan library for new routes")
+            .on_hover_text("Scan umf/ for CSV files not yet in library.json")
+            .clicked()
+        {
+            actions.scan = true;
+        }
+        if ui
+            .button("Clear & rescan")
+            .on_hover_text("Clear library.json and rebuild it from all CSV files in umf/")
+            .clicked()
+        {
+            actions.clear_rescan = true;
+        }
+    });
 
     ui.add_space(6.0);
     ui.separator();
@@ -1674,12 +2331,15 @@ fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> RouteLibraryActions {
 
     // ── Route preview map ─────────────────────────────────────────────────
     if app.lib_map_tiles.is_none() {
-        app.lib_map_tiles = Some(HttpTiles::new(walkers::sources::OpenStreetMap, ui.ctx().clone()));
+        app.lib_map_tiles =
+            Some(HttpTiles::new(walkers::sources::OpenStreetMap, ui.ctx().clone()));
     }
 
     let points: Vec<walkers::Position> = app.lib_route_points.clone();
     let map = walkers::Map::new(
-        app.lib_map_tiles.as_mut().map(|t| t as &mut dyn walkers::Tiles),
+        app.lib_map_tiles
+            .as_mut()
+            .map(|t| t as &mut dyn walkers::Tiles),
         &mut app.lib_map_memory,
         lat_lon(52.37308687621991, 4.893432625781817),
     )
@@ -1695,7 +2355,6 @@ fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> RouteLibraryActions {
     );
 
     if app.lib_route_points.is_empty() {
-        // Overlay a hint when nothing is selected yet.
         ui.label(egui::RichText::new("Select a route above to preview it on the map.").weak());
     }
 
@@ -1722,6 +2381,7 @@ fn show_library_table(app: &MyApp, ui: &mut egui::Ui, actions: &mut RouteLibrary
                 .column(egui_extras::Column::initial(110.0).at_least(80.0))  // Distance
                 .column(egui_extras::Column::initial(110.0).at_least(80.0))  // Duration
                 .column(egui_extras::Column::initial(110.0).at_least(80.0))  // Velocity
+                .column(egui_extras::Column::initial(60.0).at_least(50.0))   // Edit
                 .sense(egui::Sense::click())
                 .resizable(true)
                 .striped(true)
@@ -1730,10 +2390,11 @@ fn show_library_table(app: &MyApp, ui: &mut egui::Ui, actions: &mut RouteLibrary
                     row.col(|ui| { ui.strong("Distance"); });
                     row.col(|ui| { ui.strong("Duration"); });
                     row.col(|ui| { ui.strong("Velocity"); });
+                    row.col(|ui| { ui.strong("Edit"); });
                 })
                 .body(|mut body| {
                     for (i, entry) in app.library.iter().enumerate() {
-                        body.row(22.0, |mut row| {
+                        body.row(24.0, |mut row| {
                             row.set_selected(app.library_selected_row == Some(i));
 
                             row.col(|ui| { ui.label(&entry.name); });
@@ -1743,6 +2404,11 @@ fn show_library_table(app: &MyApp, ui: &mut egui::Ui, actions: &mut RouteLibrary
                             row.col(|ui| { ui.label(format_duration(entry.duration_s)); });
                             row.col(|ui| {
                                 ui.label(format!("{:.1} km/h", entry.velocity_kmh));
+                            });
+                            row.col(|ui| {
+                                if ui.small_button("Edit").clicked() {
+                                    actions.edit_row = Some(i);
+                                }
                             });
 
                             if row.response().clicked() {

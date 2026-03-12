@@ -29,6 +29,12 @@ cargo check --workspace --all-features --lib --target wasm32-unknown-unknown
 # Build WASM (requires trunk: cargo install trunk)
 trunk build
 
+# Run doctests
+cargo test --workspace --doc
+
+# Check spelling (requires: cargo install typos-cli)
+typos
+
 # Run all CI checks locally (equivalent to CI pipeline)
 bash check.sh
 ```
@@ -49,7 +55,7 @@ Cross-platform desktop + WASM GUI app using [egui](https://github.com/emilk/egui
 | `src/geo.rs` | `parse_coords`, `lla_to_ecef` (WGS-84), `write_transmit_points_to_csv` |
 | `src/route/ors.rs` | Async HTTP client for the OpenRouteService directions API |
 | `src/route/segment.rs` | `Segment` struct; `segmentize()` splits a route into GPS transmit points |
-| `src/route/pipeline.rs` | `run_pipeline()` — orchestrates ORS fetch → segmentize → CSV write |
+| `src/route/pipeline.rs` | `run_pipeline()` — orchestrates ORS fetch → segmentize → CSV write; `run_pipeline_from_geojson()` skips the ORS call and uses a pre-parsed GeoJSON input |
 | `src/route/geojson.rs` | Serde types for the GeoJSON API response |
 | `src/simulator/mod.rs` | Public API of the simulator module; also hosts `open_file_dialog()` |
 | `src/simulator/state.rs` | `SimSettings`, `SimState`, `SimStatus` — shared between worker and UI |

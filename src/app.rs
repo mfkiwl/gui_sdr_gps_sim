@@ -43,8 +43,10 @@ pub enum SimTab {
     /// Route-based simulation driven by a user-motion CSV file.
     #[default]
     Dynamic,
-    /// Single fixed-position simulation (static coordinates).
+    /// Single fixed-position looping simulation (static coordinates).
     Static,
+    /// Shared simulation and `HackRF` hardware settings for both simulators.
+    Settings,
 }
 
 /// Tracks the current state of the background route-generation task.
@@ -262,6 +264,82 @@ pub struct MyApp {
     #[serde(skip)]
     pub sim_rinex_dl_error: Option<String>,
 
+    // ── Static GPS Simulator ───────────────────────────────────────────────────
+    /// Path to the RINEX navigation file for the static looping simulator (not persisted).
+    #[serde(skip)]
+    pub sim_static_rinex_path: Option<PathBuf>,
+
+    /// Pending RINEX file-dialog receiver for the static simulator (not persisted).
+    #[serde(skip)]
+    pub sim_static_rinex_dialog: Option<mpsc::Receiver<Option<PathBuf>>>,
+
+    /// WGS-84 latitude in decimal degrees (not persisted).
+    #[serde(skip)]
+    pub sim_static_lat: String,
+
+    /// WGS-84 longitude in decimal degrees (not persisted).
+    #[serde(skip)]
+    pub sim_static_lon: String,
+
+    /// Height above WGS-84 ellipsoid in metres (not persisted).
+    #[serde(skip)]
+    pub sim_static_alt: String,
+
+    /// Duration of each loop pass in seconds (not persisted).
+    #[serde(skip)]
+    pub sim_static_loop_duration: f64,
+
+    /// Shared simulation state polled by the UI for the static simulator (not persisted).
+    #[serde(skip)]
+    pub sim_static_state: std::sync::Arc<std::sync::Mutex<crate::simulator::SimState>>,
+
+    /// Flag set by the UI to request the static simulation to stop (not persisted).
+    #[serde(skip)]
+    pub sim_static_stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+
+    /// Handle to the static simulation worker thread (not persisted).
+    #[serde(skip)]
+    pub sim_static_thread: Option<std::thread::JoinHandle<()>>,
+
+    /// Receives the result of a RINEX download for the static simulator (not persisted).
+    #[serde(skip)]
+    pub sim_static_rinex_download: Option<mpsc::Receiver<Result<PathBuf, String>>>,
+
+    /// Human-readable error from the last failed RINEX download for the static simulator (not persisted).
+    #[serde(skip)]
+    pub sim_static_rinex_dl_error: Option<String>,
+
+    // ── Static tab waypoint picker ─────────────────────────────────────────────
+    /// Index of the currently selected waypoint row on the static-tab picker (not persisted).
+    #[serde(skip)]
+    pub sim_static_wp_selected_row: Option<usize>,
+
+    /// HTTP tile fetcher for the static-tab waypoint map (not persisted).
+    #[serde(skip)]
+    pub sim_static_map_tiles: Option<walkers::HttpTiles>,
+
+    /// Pan/zoom state for the static-tab waypoint map (not persisted).
+    #[serde(skip)]
+    pub sim_static_map_memory: walkers::MapMemory,
+
+    /// Most recent click on the static-tab waypoint map (not persisted).
+    #[serde(skip)]
+    pub sim_static_map_clicked: Option<crate::map_plugin::ClickResult>,
+
+    // ── Dynamic simulator route picker ────────────────────────────────────────
+    /// Index of the route selected in the Dynamic Mode library table (not persisted).
+    #[serde(skip)]
+    pub sim_lib_selected_row: Option<usize>,
+    /// Route points loaded from the selected entry's `GeoJSON` file (not persisted).
+    #[serde(skip)]
+    pub sim_lib_route_points: Vec<walkers::Position>,
+    /// HTTP tile fetcher for the Dynamic Mode route-preview map (not persisted).
+    #[serde(skip)]
+    pub sim_lib_map_tiles: Option<walkers::HttpTiles>,
+    /// Pan/zoom state for the Dynamic Mode route-preview map (not persisted).
+    #[serde(skip)]
+    pub sim_lib_map_memory: walkers::MapMemory,
+
     // ── Route Library (ManageUmfRoutes page) ──────────────────────────────────
     /// Routes loaded from `umf/library.json` (not persisted).
     #[serde(skip)]
@@ -281,6 +359,20 @@ pub struct MyApp {
     /// Pan/zoom state for the library map (not persisted).
     #[serde(skip)]
     pub lib_map_memory: walkers::MapMemory,
+
+    // ── Library route editor ───────────────────────────────────────────────────
+    /// Index into `library` of the route currently being edited (not persisted).
+    #[serde(skip)]
+    pub lib_edit_entry_idx: Option<usize>,
+    /// Editable copy of the selected route's waypoints (not persisted).
+    #[serde(skip)]
+    pub lib_edit_points: Vec<walkers::Position>,
+    /// HTTP tile fetcher for the route editor map (not persisted).
+    #[serde(skip)]
+    pub lib_edit_map_tiles: Option<walkers::HttpTiles>,
+    /// Pan/zoom state for the route editor map (not persisted).
+    #[serde(skip)]
+    pub lib_edit_map_memory: walkers::MapMemory,
 
     // ── Draw Route (ManageUmfRoutes page) ─────────────────────────────────────
     /// Polyline points added by clicking on the draw-route map (not persisted).
@@ -321,6 +413,10 @@ pub struct MyApp {
 }
 
 impl Default for MyApp {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "MyApp has many independent fields; splitting into sub-structs would obscure the flat serde layout"
+    )]
     fn default() -> Self {
         let (result_tx, result_rx) = mpsc::channel::<Result<usize, String>>();
         Self {
@@ -381,12 +477,39 @@ impl Default for MyApp {
             sim_thread: None,
             sim_rinex_download: None,
             sim_rinex_dl_error: None,
+            sim_static_rinex_path: crate::rinex::today_rinex_path().filter(|p| p.exists()),
+            sim_static_rinex_dialog: None,
+            sim_static_lat: String::new(),
+            sim_static_lon: String::new(),
+            sim_static_alt: "10.0".to_owned(),
+            sim_static_loop_duration: 300.0,
+            sim_static_state: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::simulator::SimState::default(),
+            )),
+            sim_static_stop_flag: std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            ),
+            sim_static_thread: None,
+            sim_static_rinex_download: None,
+            sim_static_rinex_dl_error: None,
+            sim_static_wp_selected_row: None,
+            sim_static_map_tiles: None,
+            sim_static_map_memory: walkers::MapMemory::default(),
+            sim_static_map_clicked: None,
+            sim_lib_selected_row: None,
+            sim_lib_route_points: Vec::new(),
+            sim_lib_map_tiles: None,
+            sim_lib_map_memory: walkers::MapMemory::default(),
             library: Vec::new(),
             library_loaded: false,
             library_selected_row: None,
             lib_route_points: Vec::new(),
             lib_map_tiles: None,
             lib_map_memory: walkers::MapMemory::default(),
+            lib_edit_entry_idx: None,
+            lib_edit_points: Vec::new(),
+            lib_edit_map_tiles: None,
+            lib_edit_map_memory: walkers::MapMemory::default(),
             draw_route_points: Vec::new(),
             draw_map_tiles: None,
             draw_map_memory: walkers::MapMemory::default(),
@@ -563,6 +686,52 @@ impl MyApp {
         });
     }
 
+    /// Loads the `GeoJSON` for library entry `idx` into `sim_lib_route_points`,
+    /// sets `sim_motion_path` to the corresponding `CSV` file, and centres the
+    /// Dynamic Mode map on the first route point.
+    pub fn load_sim_lib_route(&mut self, idx: usize) {
+        self.sim_lib_route_points.clear();
+        let Some(entry) = self.library.get(idx) else {
+            return;
+        };
+        let name = entry.name.clone();
+        let Ok(umf_dir) = crate::paths::umf_dir() else {
+            return;
+        };
+
+        // Set the motion CSV path.
+        let csv_path = umf_dir.join(format!("{name}.csv"));
+        self.sim_motion_path = Some(csv_path);
+
+        // Load the route geometry from the companion GeoJSON.
+        let geojson_path = umf_dir.join(format!("{name}.geojson"));
+        let Ok(text) = std::fs::read_to_string(&geojson_path) else {
+            return;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return;
+        };
+        let Some(coords) = json
+            .pointer("/features/0/geometry/coordinates")
+            .or_else(|| json.pointer("/geometry/coordinates"))
+            .or_else(|| json.pointer("/coordinates"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            return;
+        };
+        for pt in coords {
+            let Some(arr) = pt.as_array() else {
+                continue;
+            };
+            let lon = arr.first().and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            let lat = arr.get(1).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            self.sim_lib_route_points.push(walkers::lat_lon(lat, lon));
+        }
+        if let Some(first) = self.sim_lib_route_points.first() {
+            self.sim_lib_map_memory.center_at(*first);
+        }
+    }
+
     /// Loads `umf/library.json` into `self.library` (once per session).
     pub fn load_library(&mut self) {
         if self.library_loaded {
@@ -612,6 +781,18 @@ impl MyApp {
         if let Some(first) = self.lib_route_points.first() {
             self.lib_map_memory.center_at(*first);
         }
+    }
+
+    /// Clears `library.json` and rescans `umf/` from scratch.
+    ///
+    /// Useful after deleting or renaming route files — this rebuilds the
+    /// entire index rather than only appending entries that are missing.
+    pub fn clear_and_rescan_library(&mut self) {
+        self.library.clear();
+        if let Ok(path) = crate::library::library_path() {
+            crate::library::save_library(&path, &[]);
+        }
+        self.scan_library();
     }
 
     /// Scans `umf/` for new `CSV` routes, appends them to `self.library`,
@@ -674,6 +855,157 @@ impl MyApp {
     /// Removes the waypoint at `index`.
     pub fn delete_waypoint(&mut self, index: usize) {
         self.waypoints.remove(index);
+    }
+
+    /// Spawns a thread that downloads today's RINEX nav file from CDDIS for the
+    /// static simulator.
+    ///
+    /// The result is delivered via `sim_static_rinex_download`; the UI polls it
+    /// each frame and updates `sim_static_rinex_path` on success.
+    pub fn download_rinex_static(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.sim_static_rinex_download = Some(rx);
+        self.sim_static_rinex_dl_error = None;
+        let (doy, year) = crate::rinex::today_doy_year();
+        std::thread::spawn(move || {
+            tx.send(crate::rinex::blocking_download(doy, year)).ok();
+        });
+    }
+
+    /// Spawns the static looping simulation worker thread.
+    ///
+    /// Resets shared state, builds [`crate::simulator::SimSettings`] from current
+    /// UI values, and spawns a thread that runs the GPS signal generator at a
+    /// fixed position in an indefinite loop until the stop flag is set.
+    pub fn start_static_simulation(&mut self) {
+        use std::sync::atomic::Ordering;
+
+        #[expect(
+            clippy::unwrap_used,
+            reason = "mutex poison means a prior panic; reset is best-effort"
+        )]
+        {
+            *self.sim_static_state.lock().unwrap() = crate::simulator::SimState {
+                status: crate::simulator::SimStatus::Running,
+                ..crate::simulator::SimState::default()
+            };
+        }
+        self.sim_static_stop_flag.store(false, Ordering::Relaxed);
+
+        let rinex_path = self
+            .sim_static_rinex_path
+            .clone()
+            .expect("start_static_simulation requires sim_static_rinex_path; caller must check");
+
+        let lat: f64 = self.sim_static_lat.trim().parse().unwrap_or(0.0);
+        let lon: f64 = self.sim_static_lon.trim().parse().unwrap_or(0.0);
+        let alt: f64 = self.sim_static_alt.trim().parse().unwrap_or(10.0);
+        let loop_duration = self.sim_static_loop_duration;
+
+        let settings = crate::simulator::SimSettings {
+            frequency: self.sim_frequency,
+            txvga_gain: self.sim_txvga_gain,
+            amp_enable: self.sim_amp_enable,
+            start_time: if self.sim_start_time.trim().is_empty() {
+                None
+            } else {
+                Some(self.sim_start_time.trim().to_owned())
+            },
+            time_override: self.sim_time_override,
+            ionospheric_disable: self.sim_ionospheric_disable,
+            fixed_gain: self.sim_fixed_gain_enable.then_some(self.sim_fixed_gain),
+            center_frequency: self.sim_center_freq,
+            baseband_filter: self
+                .sim_baseband_filter_enable
+                .then_some(self.sim_baseband_filter),
+            leap: self.sim_leap_enable.then_some((
+                self.sim_leap_week,
+                self.sim_leap_day,
+                self.sim_leap_delta,
+            )),
+        };
+
+        let state = std::sync::Arc::clone(&self.sim_static_state);
+        let stop = std::sync::Arc::clone(&self.sim_static_stop_flag);
+
+        self.sim_static_thread = Some(std::thread::spawn(move || {
+            crate::simulator::run_static_loop(
+                &rinex_path,
+                lat,
+                lon,
+                alt,
+                loop_duration,
+                &settings,
+                &state,
+                &stop,
+            );
+        }));
+    }
+
+    /// Loads the `GeoJSON` for library entry `idx` into `lib_edit_points` and
+    /// centres `lib_edit_map_memory` on the first point.
+    ///
+    /// Sets `lib_edit_entry_idx` to `idx` on success.
+    pub fn load_lib_edit_route(&mut self, idx: usize) {
+        self.lib_edit_points.clear();
+        let name = match self.library.get(idx) {
+            Some(e) => e.name.clone(),
+            None => return,
+        };
+        let path = match crate::paths::umf_dir() {
+            Ok(d) => d.join(format!("{name}.geojson")),
+            Err(_) => return,
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return;
+        };
+        let Some(coords) = json
+            .pointer("/features/0/geometry/coordinates")
+            .or_else(|| json.pointer("/geometry/coordinates"))
+            .or_else(|| json.pointer("/coordinates"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            return;
+        };
+        for pt in coords {
+            let Some(arr) = pt.as_array() else {
+                continue;
+            };
+            let lon = arr.first().and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            let lat = arr.get(1).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            self.lib_edit_points.push(walkers::lat_lon(lat, lon));
+        }
+        if let Some(first) = self.lib_edit_points.first() {
+            self.lib_edit_map_memory.center_at(*first);
+        }
+        self.lib_edit_entry_idx = Some(idx);
+    }
+
+    /// Copies `lib_edit_points` into `draw_route_points`, pre-fills `route_name`
+    /// and `velocity` from the library entry, and switches the route source to
+    /// [`RouteSource::DrawImport`] so the user can generate a new CSV from the
+    /// edited geometry.
+    ///
+    /// Also clears `lib_edit_entry_idx` so the editor is dismissed.
+    pub fn open_lib_edit_in_draw_route(&mut self) {
+        let Some(idx) = self.lib_edit_entry_idx else {
+            return;
+        };
+        let Some(entry) = self.library.get(idx) else {
+            return;
+        };
+        self.draw_route_points = self.lib_edit_points.clone();
+        self.route_name = entry.name.clone();
+        self.velocity = format!("{:.1}", entry.velocity_kmh);
+        self.route_source = RouteSource::DrawImport;
+        self.draw_route_status = None;
+        if let Some(first) = self.draw_route_points.first() {
+            self.draw_map_memory.center_at(*first);
+        }
+        self.lib_edit_entry_idx = None;
     }
 
     /// Spawns an async task that downloads today's RINEX nav file from CDDIS.
