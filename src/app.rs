@@ -214,6 +214,34 @@ pub struct MyApp {
     #[serde(skip)]
     pub sim_fixed_gain: i32,
 
+    /// RF centre frequency in Hz (not persisted).
+    #[serde(skip)]
+    pub sim_center_freq: u64,
+
+    /// Whether to override the baseband filter bandwidth instead of using auto (not persisted).
+    #[serde(skip)]
+    pub sim_baseband_filter_enable: bool,
+
+    /// Manual baseband filter bandwidth in Hz (not persisted).
+    #[serde(skip)]
+    pub sim_baseband_filter: u32,
+
+    /// Whether to override leap second parameters (not persisted).
+    #[serde(skip)]
+    pub sim_leap_enable: bool,
+
+    /// Leap second GPS week number (not persisted).
+    #[serde(skip)]
+    pub sim_leap_week: i32,
+
+    /// Leap second day of week, 1–7 (not persisted).
+    #[serde(skip)]
+    pub sim_leap_day: i32,
+
+    /// Delta leap seconds, ±128 (not persisted).
+    #[serde(skip)]
+    pub sim_leap_delta: i32,
+
     /// Shared simulation state polled by the UI (not persisted).
     #[serde(skip)]
     pub sim_state: std::sync::Arc<std::sync::Mutex<crate::simulator::SimState>>,
@@ -339,6 +367,13 @@ impl Default for MyApp {
             sim_ionospheric_disable: false,
             sim_fixed_gain_enable: false,
             sim_fixed_gain: 1000,
+            sim_center_freq: 1_575_420_000,
+            sim_baseband_filter_enable: false,
+            sim_baseband_filter: 1_750_000,
+            sim_leap_enable: false,
+            sim_leap_week: 0,
+            sim_leap_day: 1,
+            sim_leap_delta: 18,
             sim_state: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::simulator::SimState::default(),
             )),
@@ -649,9 +684,15 @@ impl MyApp {
         let (tx, rx) = mpsc::channel();
         self.sim_rinex_download = Some(rx);
         self.sim_rinex_dl_error = None;
-        self.rt.spawn(async move {
-            let result = crate::rinex::download_today_rinex().await;
-            tx.send(result).ok();
+        let (doy, year) = crate::rinex::today_doy_year();
+        // Use a plain OS thread rather than Tokio's spawn_blocking.  On
+        // Windows, spawn_blocking threads can interact with the SChannel TLS
+        // certificate-verification machinery (CRL/OCSP via WinHTTP/COM),
+        // which can deadlock against eframe's Win32 message pump.  A plain
+        // std::thread is fully isolated from both Tokio and the UI thread's
+        // COM apartment.
+        std::thread::spawn(move || {
+            tx.send(crate::rinex::blocking_download(doy, year)).ok();
         });
     }
 
@@ -695,6 +736,13 @@ impl MyApp {
             time_override: self.sim_time_override,
             ionospheric_disable: self.sim_ionospheric_disable,
             fixed_gain: self.sim_fixed_gain_enable.then_some(self.sim_fixed_gain),
+            center_frequency: self.sim_center_freq,
+            baseband_filter: self.sim_baseband_filter_enable.then_some(self.sim_baseband_filter),
+            leap: self.sim_leap_enable.then_some((
+                self.sim_leap_week,
+                self.sim_leap_day,
+                self.sim_leap_delta,
+            )),
         };
         let state = std::sync::Arc::clone(&self.sim_state);
         let stop = std::sync::Arc::clone(&self.sim_stop_flag);

@@ -21,6 +21,15 @@ pub struct SimSettings {
     /// When `Some`, disable path-loss calculations and hold all satellite
     /// signals at this constant gain level.
     pub fixed_gain: Option<i32>,
+    /// RF centre frequency in Hz transmitted by the `HackRF`.
+    /// Default is GPS L1 C/A (1 575 420 000 Hz).
+    pub center_frequency: u64,
+    /// Baseband filter bandwidth in Hz, or `None` to let `set_sample_rate_auto`
+    /// choose the optimal value automatically.
+    pub baseband_filter: Option<u32>,
+    /// Leap second override: `Some((gps_week, day_of_week_1_to_7, delta_leap_secs))`.
+    /// Corresponds to the `-l` flag in anywhere-sdr.
+    pub leap: Option<(i32, i32, i32)>,
 }
 
 /// Shared simulation progress state; updated by the worker, read by the UI.

@@ -551,6 +551,70 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                         .speed(10.0),
                 );
             });
+
+            ui.add_space(4.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // Centre frequency
+            ui.horizontal(|ui| {
+                ui.label("Centre frequency:");
+                ui.add(
+                    egui::DragValue::new(&mut app.sim_center_freq)
+                        .range(1_u64..=6_000_000_000_u64)
+                        .speed(100_000.0)
+                        .suffix(" Hz"),
+                )
+                .on_hover_text("RF centre frequency transmitted by the HackRF. Default: 1 575 420 000 Hz (GPS L1 C/A).");
+                if ui.small_button("L1").clicked() {
+                    app.sim_center_freq = crate::simulator::GPS_L1_HZ;
+                }
+            });
+
+            // Baseband filter
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut app.sim_baseband_filter_enable, "Baseband filter:")
+                    .on_hover_text(
+                        "Override the baseband filter bandwidth. \
+                         When unchecked, set_sample_rate_auto sets this automatically.",
+                    );
+                ui.add_enabled(
+                    app.sim_baseband_filter_enable,
+                    egui::DragValue::new(&mut app.sim_baseband_filter)
+                        .range(1_750_000_u32..=28_000_000_u32)
+                        .speed(250_000.0)
+                        .suffix(" Hz"),
+                );
+            });
+
+            // Leap second override
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut app.sim_leap_enable, "Override leap seconds:")
+                    .on_hover_text(
+                        "Override the GPS leap second parameters from the RINEX file.",
+                    );
+                ui.add_enabled(
+                    app.sim_leap_enable,
+                    egui::DragValue::new(&mut app.sim_leap_week)
+                        .range(0_i32..=9999_i32)
+                        .prefix("week "),
+                )
+                .on_hover_text("GPS week number when the leap second is effective.");
+                ui.add_enabled(
+                    app.sim_leap_enable,
+                    egui::DragValue::new(&mut app.sim_leap_day)
+                        .range(1_i32..=7_i32)
+                        .prefix("day "),
+                )
+                .on_hover_text("Day of week (1 = Sunday … 7 = Saturday).");
+                ui.add_enabled(
+                    app.sim_leap_enable,
+                    egui::DragValue::new(&mut app.sim_leap_delta)
+                        .range(-128_i32..=127_i32)
+                        .suffix(" s"),
+                )
+                .on_hover_text("Delta leap seconds: current GPS − UTC offset in whole seconds.");
+            });
         });
     });
 

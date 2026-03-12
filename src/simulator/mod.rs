@@ -7,7 +7,7 @@ mod state;
 mod worker;
 
 pub use state::{SimSettings, SimState, SimStatus};
-pub use worker::run;
+pub use worker::{GPS_L1_HZ, run};
 
 use std::{path::PathBuf, sync::mpsc, thread};
 

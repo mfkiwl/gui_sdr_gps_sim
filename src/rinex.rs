@@ -31,7 +31,7 @@ pub fn rinex_dir() -> Result<PathBuf, String> {
 ///
 /// Both values are `u32`; GPS data years are always positive so the chrono
 /// `i32` year is cast safely.
-fn today_doy_year() -> (u32, u32) {
+pub(crate) fn today_doy_year() -> (u32, u32) {
     use chrono::{Datelike as _, Utc};
     let now = Utc::now();
     // year() returns i32 but GPS data years are always well within u32 range.
@@ -58,12 +58,15 @@ pub fn today_rinex_path() -> Option<PathBuf> {
     rinex_dir().ok().map(|d| d.join(today_rinex_filename()))
 }
 
-/// Blocking inner function — runs inside `spawn_blocking`.
+/// Blocking download — called directly from a `std::thread::spawn` thread.
 ///
 /// Connects via explicit FTPS, downloads the `.gz` file, decompresses it in
 /// memory, and writes the RINEX nav file to [`rinex_dir`].
-fn blocking_download(doy: u32, year: u32) -> Result<PathBuf, String> {
-    use std::io::Read as _;
+///
+/// A 15-second TCP connect timeout and 30-second socket read/write timeouts
+/// are set so every network operation fails cleanly instead of hanging.
+pub(crate) fn blocking_download(doy: u32, year: u32) -> Result<PathBuf, String> {
+    use std::{io::Read as _, net::ToSocketAddrs as _, time::Duration};
 
     use flate2::read::GzDecoder;
     use suppaftp::{NativeTlsConnector, NativeTlsFtpStream};
@@ -83,9 +86,32 @@ fn blocking_download(doy: u32, year: u32) -> Result<PathBuf, String> {
         .map_err(|e| format!("TLS init: {e}"))?;
     let connector = NativeTlsConnector::from(native);
 
-    // Establish a plain FTP connection, then upgrade to explicit FTPS (AUTH TLS).
-    let plain = NativeTlsFtpStream::connect(format!("{CDDIS_HOST}:21"))
+    // Resolve DNS before connecting so we can use connect_timeout.
+    let addr = format!("{CDDIS_HOST}:21")
+        .to_socket_addrs()
+        .map_err(|e| format!("DNS resolution: {e}"))?
+        .next()
+        .ok_or_else(|| "DNS returned no addresses for CDDIS host".to_owned())?;
+
+    // Establish a plain FTP connection with a 15-second timeout.
+    // Using connect_timeout (not connect) prevents indefinite hangs when the
+    // server drops SYN packets.
+    let plain = NativeTlsFtpStream::connect_timeout(addr, Duration::from_secs(15))
         .map_err(|e| format!("FTP connect: {e}"))?;
+
+    // Set 30-second read/write timeouts at the OS socket level.  These apply
+    // to both the TLS handshake and all subsequent FTP transfers.  Without
+    // this, the SChannel TLS handshake on Windows can hang indefinitely while
+    // performing CRL/OCSP certificate verification via WinHTTP.
+    plain
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .map_err(|e| format!("Set read timeout: {e}"))?;
+    plain
+        .get_ref()
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .map_err(|e| format!("Set write timeout: {e}"))?;
+
     let mut ftp = plain
         .into_secure(connector, CDDIS_HOST)
         .map_err(|e| format!("FTPS handshake: {e}"))?;
@@ -114,21 +140,3 @@ fn blocking_download(doy: u32, year: u32) -> Result<PathBuf, String> {
     Ok(out_path)
 }
 
-/// Downloads and decompresses today's RINEX navigation file from CDDIS via
-/// anonymous FTPS.
-///
-/// The blocking transfer is offloaded to a thread-pool thread so the async
-/// caller remains responsive.  On success, returns the local [`PathBuf`] of
-/// the decompressed `.n` file inside [`rinex_dir`].
-///
-/// # Errors
-///
-/// Returns a human-readable [`String`] if the directory cannot be created,
-/// the FTP connection fails, the TLS handshake fails, the file transfer
-/// fails, or gzip decompression fails.
-pub async fn download_today_rinex() -> Result<PathBuf, String> {
-    let (doy, year) = today_doy_year();
-    tokio::task::spawn_blocking(move || blocking_download(doy, year))
-        .await
-        .map_err(|e| format!("Spawn error: {e}"))?
-}

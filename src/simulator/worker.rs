@@ -16,8 +16,8 @@ use libhackrf::prelude::*;
 
 use super::state::{SimSettings, SimState, SimStatus};
 
-/// GPS L1 C/A centre frequency in Hz.
-const GPS_L1_HZ: u64 = 1_575_420_000;
+/// GPS L1 C/A centre frequency in Hz — the default when no override is set.
+pub const GPS_L1_HZ: u64 = 1_575_420_000;
 
 /// Entry point called from the UI after spawning a dedicated thread.
 ///
@@ -80,6 +80,10 @@ fn do_run(
         }
     });
 
+    let leap = settings
+        .leap
+        .map(|(week, day, delta)| vec![week, day, delta]);
+
     let mut generator = SignalGeneratorBuilder::default()
         .navigation_file(Some(rinex_path.to_path_buf()))?
         .user_motion_file(Some(motion_path.to_path_buf()))?
@@ -89,6 +93,7 @@ fn do_run(
         .time_override(Some(settings.time_override))
         .ionospheric_disable(Some(settings.ionospheric_disable))
         .path_loss(settings.fixed_gain)
+        .leap(leap)
         .verbose(Some(false))
         .build()?;
 
@@ -102,8 +107,13 @@ fn do_run(
 
     // 2. Open and configure HackRF.
     let mut sdr = HackRF::new_auto()?;
-    sdr.set_freq(GPS_L1_HZ)?;
+    sdr.set_freq(settings.center_frequency)?;
     sdr.set_sample_rate_auto(settings.frequency as f64)?;
+    // If a manual baseband filter bandwidth was specified, override the value
+    // that set_sample_rate_auto chose automatically.
+    if let Some(bw) = settings.baseband_filter {
+        sdr.set_baseband_filter_bandwidth(bw)?;
+    }
     sdr.set_txvga_gain(settings.txvga_gain)?;
     sdr.set_amp_enable(settings.amp_enable)?;
     sdr.enter_tx_mode()?;

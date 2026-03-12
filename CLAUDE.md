@@ -57,6 +57,8 @@ Cross-platform desktop + WASM GUI app using [egui](https://github.com/emilk/egui
 | `src/rinex.rs` | Downloads today's broadcast RINEX nav file from CDDIS via anonymous FTPS |
 | `src/map_plugin.rs` | `ClickCapturePlugin` / `WaypointMarkerPlugin` for the `walkers` map widget |
 | `src/paths.rs` | `umf_dir()` / `waypoint_dir()` — create and return well-known working directories |
+| `src/import.rs` | `load_route_file()` — parses GPX and KML files into `[lat, lon]` sequences |
+| `src/library.rs` | `RouteEntry` type; scans `umf/` for CSV routes and persists metadata to `library.json` |
 
 **Data flow for route generation:**
 
@@ -67,7 +69,7 @@ Cross-platform desktop + WASM GUI app using [egui](https://github.com/emilk/egui
 
 **Data flow for GPS simulation:**
 
-1. User selects a RINEX nav file (or downloads today's from CDDIS via `rinex::download_today_rinex()`) and a UMF motion file, then clicks "Start".
+1. User selects a RINEX nav file (or downloads today's from CDDIS via `rinex::blocking_download()` run in a `std::thread::spawn`) and a UMF motion file, then clicks "Start".
 2. The UI spawns a dedicated OS thread running `simulator::run()`.
 3. `worker::do_run()` builds a `gps::SignalGenerator`, opens `HackRF` on GPS L1 (1 575.42 MHz), then feeds 100 ms IQ blocks through an `mpsc::sync_channel` to a second thread that writes to HackRF via USB.
 4. Progress (`current_step`, `bytes_sent`) and final status (`Done`/`Stopped`/`Error`) are communicated back via `Arc<Mutex<SimState>>`. The UI polls this each frame.
