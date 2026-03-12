@@ -37,14 +37,38 @@ fn add_map_zoom_controls(
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_min_width(28.0);
-                if ui.button(" + ").clicked() {
+                if ui
+                    .button(" + ")
+                    .on_hover_text("Zoom in")
+                    .clicked()
+                {
                     map_memory.zoom_in().unwrap_or_default();
                 }
-                if ui.button(" − ").clicked() {
+                if ui
+                    .button(" − ")
+                    .on_hover_text("Zoom out")
+                    .clicked()
+                {
                     map_memory.zoom_out().unwrap_or_default();
                 }
             });
         });
+}
+
+/// Renders a page-level heading followed by a separator.
+///
+/// Use at the top of every page to give a uniform title appearance.
+fn page_heading(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(2.0);
+    ui.heading(title);
+    ui.separator();
+    ui.add_space(6.0);
+}
+
+/// Renders a bold section title inside a `ui.group()` block.
+fn section_title(ui: &mut egui::Ui, title: &str) {
+    ui.label(egui::RichText::new(title).strong().size(13.0));
+    ui.add_space(3.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -242,14 +266,20 @@ fn show_menu_bar(app: &mut MyApp, ctx: &egui::Context) {
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui.button("Set ORS API Key…").clicked() {
+                if ui
+                    .button("Set ORS API Key…")
+                    .on_hover_text(
+                        "Enter your OpenRouteService API key, required for the ORS API route source.",
+                    )
+                    .clicked()
+                {
                     app.ors_key_input = app.ors_api_key.clone();
                     app.ors_key_show = false;
                     app.ors_key_dialog_open = true;
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Quit").clicked() {
+                if ui.button("Quit").on_hover_text("Close the application.").clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
@@ -276,26 +306,44 @@ fn show_api_key_dialog(app: &mut MyApp, ctx: &egui::Context) {
         .resizable(false)
         .open(&mut window_open)
         .show(ctx, |ui| {
-            ui.label("OpenRouteService API Key:");
+            ui.label("OpenRouteService API Key:")
+                .on_hover_text("Obtain a free key at openrouteservice.org/dev/#/signup");
             ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut app.ors_key_input)
                         .password(!app.ors_key_show)
                         .desired_width(300.0),
-                );
+                )
+                .on_hover_text("Paste your ORS API key here.");
                 let eye = if app.ors_key_show { "🔒" } else { "👁" };
-                if ui.button(eye).clicked() {
+                if ui
+                    .button(eye)
+                    .on_hover_text(if app.ors_key_show {
+                        "Hide the API key"
+                    } else {
+                        "Show the API key"
+                    })
+                    .clicked()
+                {
                     app.ors_key_show = !app.ors_key_show;
                 }
             });
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button("Save").clicked() {
+                if ui
+                    .button("Save")
+                    .on_hover_text("Save the key and close this dialog.")
+                    .clicked()
+                {
                     app.ors_api_key = app.ors_key_input.trim().to_owned();
                     app.ors_key_dialog_open = false;
                 }
-                if ui.button("Cancel").clicked() {
+                if ui
+                    .button("Cancel")
+                    .on_hover_text("Discard changes and close this dialog.")
+                    .clicked()
+                {
                     app.ors_key_dialog_open = false;
                 }
             });
@@ -314,35 +362,54 @@ fn show_nav_panel(app: &mut MyApp, ctx: &egui::Context) {
     egui::SidePanel::left("nav_panel")
         .default_width(200.0)
         .show(ctx, |ui| {
-            ui.add(
-                egui::Image::new(egui::include_image!("../assets/img/icon-1024.png"))
-                    .max_width(200.0)
-                    .maintain_aspect_ratio(true)
-                    .shrink_to_fit()
-                    .corner_radius(10),
-            );
+            let logo_resp = ui
+                .add(
+                    egui::Image::new(egui::include_image!("../assets/img/icon-1024.png"))
+                        .max_width(200.0)
+                        .maintain_aspect_ratio(true)
+                        .shrink_to_fit()
+                        .corner_radius(10)
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text("Go to the Home page.");
+            if logo_resp.clicked() {
+                navigate(app, AppPage::Home);
+            }
+            ui.add_space(4.0);
 
-            if nav_image(
+            if nav_image_active_with_tooltip(
                 ui,
                 egui::include_image!("../assets/img/sdr_gps_simulator.png"),
+                app.current_mode == AppPage::SdrGpsSimulator,
+                "GPS Simulator — transmit GPS L1 C/A signals via HackRF \
+                 from a dynamic route or a static position.",
             ) {
                 navigate(app, AppPage::SdrGpsSimulator);
             }
-            if nav_image(
+            if nav_image_active_with_tooltip(
                 ui,
                 egui::include_image!("../assets/img/create_umf_route.png"),
+                app.current_mode == AppPage::CreateUmfRoute,
+                "Create UMF Route — generate a GPS user-motion CSV file \
+                 from an ORS route, GeoJSON, a drawn polyline, or a GPX/KML import.",
             ) {
                 navigate(app, AppPage::CreateUmfRoute);
             }
-            if nav_image(
+            if nav_image_active_with_tooltip(
                 ui,
                 egui::include_image!("../assets/img/manage_waypoints.png"),
+                app.current_mode == AppPage::ManageWaypoints,
+                "Manage Waypoints — store and organise named geographic coordinates \
+                 to use as route endpoints or static simulation positions.",
             ) {
                 navigate(app, AppPage::ManageWaypoints);
             }
-            if nav_image(
+            if nav_image_active_with_tooltip(
                 ui,
                 egui::include_image!("../assets/img/manage_umf_routes.png"),
+                app.current_mode == AppPage::ManageUmfRoutes,
+                "Manage UMF Routes — browse, preview, edit, and delete \
+                 saved UMF route CSV files.",
             ) {
                 navigate(app, AppPage::ManageUmfRoutes);
             }
@@ -378,17 +445,58 @@ fn navigate(app: &mut MyApp, new_page: AppPage) {
     app.current_mode = new_page;
 }
 
-/// Renders a clickable image button in the nav sidebar. Returns `true` if clicked.
-fn nav_image(ui: &mut egui::Ui, src: egui::ImageSource<'_>) -> bool {
-    ui.add(
-        egui::Image::new(src)
-            .max_width(200.0)
-            .maintain_aspect_ratio(true)
-            .shrink_to_fit()
-            .corner_radius(10)
-            .sense(egui::Sense::click()),
-    )
-    .clicked()
+/// Renders a nav image button with an optional hover tooltip.
+///
+/// Draws a highlighted left border when `active`. Pass an empty `tooltip` string
+/// to skip adding the tooltip.
+fn nav_image_active_with_tooltip(
+    ui: &mut egui::Ui,
+    src: egui::ImageSource<'_>,
+    active: bool,
+    tooltip: &str,
+) -> bool {
+    if active {
+        let accent_color = egui::Color32::from_rgb(100, 160, 255);
+        egui::Frame::new()
+            .inner_margin(egui::Margin { left: 4, ..Default::default() })
+            .stroke(egui::Stroke::NONE)
+            .show(ui, |ui| {
+                let resp = ui.add(
+                    egui::Image::new(src)
+                        .max_width(196.0)
+                        .maintain_aspect_ratio(true)
+                        .shrink_to_fit()
+                        .corner_radius(10)
+                        .sense(egui::Sense::click()),
+                );
+                // draw left accent bar
+                let bar = egui::Rect::from_min_size(
+                    resp.rect.min - egui::vec2(6.0, 0.0),
+                    egui::vec2(3.0, resp.rect.height()),
+                );
+                ui.painter().rect_filled(bar, 0.0, accent_color);
+                if !tooltip.is_empty() {
+                    resp.on_hover_text(tooltip).clicked()
+                } else {
+                    resp.clicked()
+                }
+            })
+            .inner
+    } else {
+        let resp = ui.add(
+            egui::Image::new(src)
+                .max_width(200.0)
+                .maintain_aspect_ratio(true)
+                .shrink_to_fit()
+                .corner_radius(10)
+                .sense(egui::Sense::click()),
+        );
+        if !tooltip.is_empty() {
+            resp.on_hover_text(tooltip).clicked()
+        } else {
+            resp.clicked()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -515,8 +623,52 @@ fn show_central_panel(app: &mut MyApp, ctx: &egui::Context) {
 // ---------------------------------------------------------------------------
 
 fn show_home_page(ui: &mut egui::Ui) {
-    ui.heading("Home");
-    // TODO: add Home Page
+    page_heading(ui, "Gui SDR GPS Simulator");
+
+    ui.label(
+        "A desktop tool for generating and transmitting GPS L1 C/A signals \
+         via a HackRF SDR, and for creating the UMF user-motion files they require.",
+    );
+
+    ui.add_space(12.0);
+
+    home_card(
+        ui,
+        "GPS Simulator",
+        "Transmit a GPS L1 C/A signal from a static position or \
+         from a pre-recorded UMF motion file.",
+    );
+    ui.add_space(8.0);
+    home_card(
+        ui,
+        "Create UMF Route",
+        "Generate a UMF user-motion CSV from an ORS route, \
+         a GeoJSON file, a hand-drawn polyline, or a GPX/KML import.",
+    );
+    ui.add_space(8.0);
+    home_card(
+        ui,
+        "Manage Waypoints",
+        "Store, filter, and organise named geographic coordinates. \
+         Select them as route endpoints or static simulation positions.",
+    );
+    ui.add_space(8.0);
+    home_card(
+        ui,
+        "Manage UMF Routes",
+        "Browse, preview, edit, and delete the UMF route library. \
+         Open any route in the route editor to tweak its geometry.",
+    );
+}
+
+/// Renders a single info card for the home page.
+fn home_card(ui: &mut egui::Ui, title: &str, body: &str) {
+    ui.group(|ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new(title).strong().size(14.0));
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(body).weak());
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -524,13 +676,23 @@ fn show_home_page(ui: &mut egui::Ui) {
 // ---------------------------------------------------------------------------
 
 fn show_sdr_gps_page(app: &mut MyApp, ui: &mut egui::Ui) {
-    ui.heading("GPS L1 C/A Simulator");
-    ui.add_space(6.0);
+    page_heading(ui, "GPS L1 C/A Simulator");
 
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.selectable_value(&mut app.sim_tab, SimTab::Dynamic, "Dynamic Mode");
-        ui.selectable_value(&mut app.sim_tab, SimTab::Static, "Static Mode");
-        ui.selectable_value(&mut app.sim_tab, SimTab::Settings, "Settings");
+        ui.selectable_value(&mut app.sim_tab, SimTab::Dynamic, "Dynamic Mode")
+            .on_hover_text(
+                "Simulate a moving receiver following a pre-recorded UMF motion CSV route.",
+            );
+        ui.selectable_value(&mut app.sim_tab, SimTab::Static, "Static Mode")
+            .on_hover_text(
+                "Simulate a stationary receiver at a fixed WGS-84 position, looping indefinitely.",
+            );
+        ui.selectable_value(&mut app.sim_tab, SimTab::Settings, "Settings")
+            .on_hover_text(
+                "Configure simulation parameters and HackRF hardware settings \
+                 shared by both Dynamic and Static modes.",
+            );
     });
     ui.separator();
 
@@ -555,8 +717,7 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
 
     // ── Input files ──────────────────────────────────────────────────────────
     ui.group(|ui| {
-        ui.label(egui::RichText::new("Input Files").strong());
-        ui.add_space(4.0);
+        section_title(ui, "Input Files");
 
         // RINEX Nav File — browse + download buttons.
         let downloading = app.sim_rinex_download.is_some();
@@ -581,6 +742,10 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                         app.sim_rinex_dialog.is_none(),
                         egui::Button::new(browse_label),
                     )
+                    .on_hover_text(
+                        "Select a RINEX navigation file (.nav / .23n / .24n …) \
+                         containing GPS satellite ephemeris data.",
+                    )
                     .clicked()
                 {
                     open_browse = true;
@@ -593,7 +758,8 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                 {
                     start_download = true;
                 }
-                ui.label(egui::RichText::new(display).monospace().weak());
+                ui.label(egui::RichText::new(display).monospace().weak())
+                    .on_hover_text("Currently selected RINEX navigation file.");
             });
         });
         if open_browse {
@@ -634,8 +800,7 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
     // ── Route library ─────────────────────────────────────────────────────────
     let running = app.sim_thread.is_some();
     ui.add_enabled_ui(!running, |ui| ui.group(|ui| {
-        ui.label(egui::RichText::new("Route Library").strong());
-        ui.add_space(4.0);
+        section_title(ui, "Route Library");
 
         if app.library.is_empty() {
             ui.label(egui::RichText::new("No routes in library. Go to Manage UMF Routes to scan.").weak());
@@ -751,6 +916,10 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
         ui.add_enabled_ui(ready, |ui| {
             if ui
                 .button(egui::RichText::new("  ▶  Start Simulation  ").size(15.0))
+                .on_hover_text(
+                    "Begin transmitting the GPS route on the HackRF. \
+                     Requires a RINEX nav file and a Motion CSV to be selected.",
+                )
                 .clicked()
             {
                 app.start_simulation();
@@ -760,6 +929,7 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
         if running
             && ui
                 .button(egui::RichText::new("  ■  Stop  ").size(15.0))
+                .on_hover_text("Stop the running simulation and release the HackRF device.")
                 .clicked()
         {
             app.sim_stop_flag.store(true, Ordering::Relaxed);
@@ -770,8 +940,7 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
 
     // ── Status panel ─────────────────────────────────────────────────────────
     ui.group(|ui| {
-        ui.label(egui::RichText::new("Status").strong());
-        ui.add_space(4.0);
+        section_title(ui, "Status");
 
         let state = match app.sim_state.lock() {
             Ok(guard) => guard.clone(),
@@ -805,12 +974,14 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                     state.total_steps as f64 / 10.0,
                 ))
                 .desired_width(500.0),
-        );
+        )
+        .on_hover_text("Simulation progress: elapsed time / total route duration.");
 
         ui.label(format!(
             "Bytes transmitted: {:.2} MB",
             state.bytes_sent as f64 / 1_000_000.0
-        ));
+        ))
+        .on_hover_text("Total IQ data sent to the HackRF USB bulk endpoint.");
     });
 }
 
@@ -865,8 +1036,7 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
 
     // ── RINEX nav file ────────────────────────────────────────────────────────
     ui.group(|ui| {
-        ui.label(egui::RichText::new("Input File").strong());
-        ui.add_space(4.0);
+        section_title(ui, "Input File");
 
         let downloading = app.sim_static_rinex_download.is_some();
         let mut open_browse = false;
@@ -891,6 +1061,10 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                         app.sim_static_rinex_dialog.is_none(),
                         egui::Button::new(browse_label),
                     )
+                    .on_hover_text(
+                        "Select a RINEX navigation file (.nav / .23n / .24n …) \
+                         containing GPS satellite ephemeris data.",
+                    )
                     .clicked()
                 {
                     open_browse = true;
@@ -903,7 +1077,8 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                 {
                     start_download = true;
                 }
-                ui.label(egui::RichText::new(display).monospace().weak());
+                ui.label(egui::RichText::new(display).monospace().weak())
+                    .on_hover_text("Currently selected RINEX navigation file.");
             });
         });
         if open_browse {
@@ -938,8 +1113,7 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
     let mut new_selected: Option<usize> = None;
 
     ui.group(|ui| {
-        ui.label(egui::RichText::new("Select from Waypoints").strong());
-        ui.add_space(4.0);
+        section_title(ui, "Select from Waypoints");
 
         egui::ScrollArea::vertical()
             .id_salt("sim_static_wp_scroll")
@@ -1041,8 +1215,7 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
     let running = app.sim_static_thread.is_some();
     ui.add_enabled_ui(!running, |ui| {
         ui.group(|ui| {
-            ui.label(egui::RichText::new("Static Position").strong());
-            ui.add_space(4.0);
+            section_title(ui, "Static Position");
 
             ui.horizontal(|ui| {
                 ui.label("Latitude (°): ");
@@ -1101,6 +1274,7 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
         if running
             && ui
                 .button(egui::RichText::new("  ■  Stop  ").size(15.0))
+                .on_hover_text("Stop the looping simulation and release the HackRF device.")
                 .clicked()
         {
             app.sim_static_stop_flag.store(true, Ordering::Relaxed);
@@ -1119,8 +1293,7 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
 
     // ── Status panel ──────────────────────────────────────────────────────────
     ui.group(|ui| {
-        ui.label(egui::RichText::new("Status").strong());
-        ui.add_space(4.0);
+        section_title(ui, "Status");
 
         let state = match app.sim_static_state.lock() {
             Ok(guard) => guard.clone(),
@@ -1137,7 +1310,10 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new(status_text).color(status_colour));
 
         if state.loop_count > 0 {
-            ui.label(format!("Loop pass: {}", state.loop_count));
+            ui.label(format!("Loop pass: {}", state.loop_count))
+                .on_hover_text(
+                    "Number of completed loop passes since the simulation started.",
+                );
         }
 
         if let Some(err) = &state.error {
@@ -1158,12 +1334,14 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                     state.total_steps as f64 / 10.0,
                 ))
                 .desired_width(500.0),
-        );
+        )
+        .on_hover_text("Progress through the current loop pass: elapsed / loop duration.");
 
         ui.label(format!(
             "Bytes transmitted: {:.2} MB",
             state.bytes_sent as f64 / 1_000_000.0
-        ));
+        ))
+        .on_hover_text("Total IQ data sent to the HackRF USB bulk endpoint.");
     });
 }
 
@@ -1176,27 +1354,35 @@ fn show_sim_settings_tab(app: &mut MyApp, ui: &mut egui::Ui) {
     let either_running = app.sim_thread.is_some() || app.sim_static_thread.is_some();
 
     ui.add_space(4.0);
+    ui.label(egui::RichText::new("Shared by Dynamic Mode and Static Mode.").weak().italics());
+    ui.add_space(6.0);
 
     // ── Simulation settings ───────────────────────────────────────────────────
     ui.add_enabled_ui(!either_running, |ui| {
         ui.group(|ui| {
-            ui.label(egui::RichText::new("Simulation Settings").strong());
-            ui.label(
-                egui::RichText::new("Shared by Dynamic Mode and Static Mode.")
-                    .small()
-                    .weak(),
-            );
-            ui.add_space(4.0);
+            section_title(ui, "Simulation Settings");
 
             ui.horizontal(|ui| {
-                ui.label("Start time:");
+                ui.label("Start time:")
+                    .on_hover_text(
+                        "Scenario start time. Format: YYYY/MM/DD,hh:mm:ss  \
+                         or \"now\" for current UTC, or leave empty for ephemeris start.",
+                    );
                 ui.text_edit_singleline(&mut app.sim_start_time).on_hover_text(
                     "YYYY/MM/DD,hh:mm:ss  ·  \"now\"  ·  leave empty for ephemeris start",
                 );
-                if ui.small_button("Now").clicked() {
+                if ui
+                    .small_button("Now")
+                    .on_hover_text("Set start time to the current UTC time.")
+                    .clicked()
+                {
                     app.sim_start_time = "now".to_owned();
                 }
-                if ui.small_button("Clear").clicked() {
+                if ui
+                    .small_button("Clear")
+                    .on_hover_text("Clear the start time field; the ephemeris reference time will be used.")
+                    .clicked()
+                {
                     app.sim_start_time = String::new();
                 }
             });
@@ -1265,25 +1451,32 @@ fn show_sim_settings_tab(app: &mut MyApp, ui: &mut egui::Ui) {
     // ── HackRF settings ───────────────────────────────────────────────────────
     ui.add_enabled_ui(!either_running, |ui| {
         ui.group(|ui| {
-            ui.label(egui::RichText::new("HackRF Settings").strong());
-            ui.label(
-                egui::RichText::new("Shared by Dynamic Mode and Static Mode.")
-                    .small()
-                    .weak(),
-            );
-            ui.add_space(4.0);
+            section_title(ui, "HackRF Settings");
 
             ui.horizontal(|ui| {
-                ui.label("TX VGA Gain:");
-                ui.add(egui::Slider::new(&mut app.sim_txvga_gain, 0..=47).suffix(" dB"));
+                ui.label("TX VGA Gain:")
+                    .on_hover_text(
+                        "Transmit Variable Gain Amplifier level (0–47 dB). \
+                         Higher values increase the transmitted signal power.",
+                    );
+                ui.add(egui::Slider::new(&mut app.sim_txvga_gain, 0..=47).suffix(" dB"))
+                    .on_hover_text(
+                        "HackRF TX VGA gain in dB (0–47). \
+                         Increase carefully; strong signals can interfere with nearby receivers.",
+                    );
             });
             ui.horizontal(|ui| {
-                ui.label("Sample Rate:");
+                ui.label("Sample Rate:")
+                    .on_hover_text(
+                        "Baseband IQ sample rate sent to the HackRF. \
+                         Must be at least 2.046 MHz for GPS L1 C/A.",
+                    );
                 ui.add(
                     egui::Slider::new(&mut app.sim_frequency, 1_000_000..=20_000_000)
                         .suffix(" Hz")
                         .step_by(100_000.0),
-                );
+                )
+                .on_hover_text("Baseband sample rate in Hz (1 – 20 MHz).");
             });
             ui.horizontal(|ui| {
                 ui.label("Centre frequency:");
@@ -1297,7 +1490,11 @@ fn show_sim_settings_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                     "RF centre frequency transmitted by the HackRF. \
                      Default: 1 575 420 000 Hz (GPS L1 C/A).",
                 );
-                if ui.small_button("L1").clicked() {
+                if ui
+                    .small_button("L1")
+                    .on_hover_text("Reset to the GPS L1 C/A centre frequency (1 575 420 000 Hz).")
+                    .clicked()
+                {
                     app.sim_center_freq = crate::simulator::GPS_L1_HZ;
                 }
             });
@@ -1315,7 +1512,11 @@ fn show_sim_settings_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                         .suffix(" Hz"),
                 );
             });
-            ui.checkbox(&mut app.sim_amp_enable, "Enable RF Amplifier");
+            ui.checkbox(&mut app.sim_amp_enable, "Enable RF Amplifier")
+                .on_hover_text(
+                    "Enable the HackRF on-board RF amplifier (+11 dB). \
+                     Use only when the antenna is connected and in a shielded enclosure.",
+                );
             ui.label(
                 egui::RichText::new(
                     "⚠ Transmitting GPS signals may be illegal. \
@@ -1357,11 +1558,13 @@ fn sim_file_row(
             let btn_text = if dialog_open { "…" } else { "Browse…" };
             if ui
                 .add_enabled(!dialog_open, egui::Button::new(btn_text))
+                .on_hover_text(format!("Select the {label} file."))
                 .clicked()
             {
                 browse_clicked = true;
             }
-            ui.label(egui::RichText::new(display).monospace().weak());
+            ui.label(egui::RichText::new(display).monospace().weak())
+                .on_hover_text("Currently selected file.");
         });
     });
     browse_clicked
@@ -1458,22 +1661,35 @@ fn show_map_click_popup(
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.label(coord.clone());
+                ui.label(coord.clone())
+                    .on_hover_text("Coordinates of the map click in decimal degrees.");
                 ui.separator();
-                if ui.button("Set as Start").clicked() {
+                if ui
+                    .button("Set as Start")
+                    .on_hover_text("Use this position as the route start point.")
+                    .clicked()
+                {
                     actions.set_start = Some(coord.clone());
                     dismissed = true;
                 }
-                if ui.button("Add as Via Point").clicked() {
+                if ui
+                    .button("Add as Via Point")
+                    .on_hover_text("Add this position as an intermediate via point.")
+                    .clicked()
+                {
                     actions.add_via_with_pos = Some(coord.clone());
                     dismissed = true;
                 }
-                if ui.button("Set as End").clicked() {
+                if ui
+                    .button("Set as End")
+                    .on_hover_text("Use this position as the route end point.")
+                    .clicked()
+                {
                     actions.set_end = Some(coord.clone());
                     dismissed = true;
                 }
                 ui.separator();
-                if ui.button("Dismiss").clicked() {
+                if ui.button("Dismiss").on_hover_text("Close this popup.").clicked() {
                     dismissed = true;
                 }
             });
@@ -1489,35 +1705,46 @@ fn show_map_click_popup(
 fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageActions {
     let mut actions = RoutePageActions::default();
 
-    ui.heading("UMF Route Creator");
-    ui.separator();
+    page_heading(ui, "UMF Route Creator");
 
     ui.horizontal(|ui| {
-        ui.label("Route name:");
-        ui.text_edit_singleline(&mut app.route_name);
+        ui.label("Route name:")
+            .on_hover_text("Name used for the output files: {name}.csv and {name}.geojson.");
+        ui.text_edit_singleline(&mut app.route_name)
+            .on_hover_text(
+                "Enter a filename-safe name for the route (no spaces or special characters).",
+            );
     });
 
     ui.add_space(4.0);
 
     // ── Route source selector ─────────────────────────────────────────────────
     ui.horizontal(|ui| {
-        ui.label("Route source:");
-        ui.selectable_value(&mut app.route_source, RouteSource::OrsApi, "ORS API");
+        ui.label("Route source:")
+            .on_hover_text("Choose how the route geometry is obtained.");
+        ui.selectable_value(&mut app.route_source, RouteSource::OrsApi, "ORS API")
+            .on_hover_text(
+                "Fetch a turn-by-turn route from the OpenRouteService API \
+                 between start, optional via points, and end.",
+            );
         ui.selectable_value(
             &mut app.route_source,
             RouteSource::GeoJsonFile,
             "Load GeoJSON file",
-        );
+        )
+        .on_hover_text("Load a pre-existing GeoJSON route file from disk.");
         ui.selectable_value(
             &mut app.route_source,
             RouteSource::ImportKmlGpx,
             "Import KML / GPX",
-        );
+        )
+        .on_hover_text("Import track points from a GPX or KML file.");
         ui.selectable_value(
             &mut app.route_source,
             RouteSource::DrawImport,
             "Draw route",
-        );
+        )
+        .on_hover_text("Click on the map to place waypoints and build a custom polyline.");
     });
 
     ui.separator();
@@ -1526,7 +1753,11 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
         RouteSource::OrsApi => {
             // ── ORS settings ──────────────────────────────────────────────────
             ui.horizontal(|ui| {
-                ui.label("Profile:");
+                ui.label("Profile:")
+                    .on_hover_text(
+                        "Routing profile determines which roads/paths are used \
+                         and how the route is calculated.",
+                    );
                 egui::ComboBox::from_id_salt("ors_profile")
                     .selected_text(ors_profile_label(&app.ors_profile))
                     .show_ui(ui, |ui| {
@@ -1537,19 +1768,29 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
                                 label,
                             );
                         }
-                    });
+                    })
+                    .response
+                    .on_hover_text(
+                        "Select the ORS routing profile that matches your simulation scenario.",
+                    );
             });
 
             ui.separator();
 
             // ── ORS: start / via / end coordinate inputs ──────────────────────
             ui.horizontal(|ui| {
-                ui.label("Start:");
-                ui.text_edit_singleline(&mut app.start.text);
+                ui.label("Start:")
+                    .on_hover_text("Route start point.");
+                ui.text_edit_singleline(&mut app.start.text)
+                    .on_hover_text(
+                        "Enter coordinates as \"lat, lon\" in decimal degrees, \
+                         e.g. 52.3731, 4.8934. You can also click on the map.",
+                    );
             });
 
             ui.add_space(4.0);
-            ui.label("Via points:");
+            ui.label("Via points:")
+                .on_hover_text("Optional intermediate stops the route must pass through.");
 
             egui::ScrollArea::vertical()
                 .max_height(100.0)
@@ -1557,30 +1798,50 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
                     for (i, via) in app.viapoints.iter_mut().enumerate() {
                         ui.horizontal(|ui| {
                             ui.label(format!("Via {}:", i + 1));
-                            ui.text_edit_singleline(&mut via.text);
-                            if ui.button("X").clicked() {
+                            ui.text_edit_singleline(&mut via.text)
+                                .on_hover_text(
+                                    "Intermediate waypoint as \"lat, lon\" in decimal degrees.",
+                                );
+                            if ui
+                                .button("X")
+                                .on_hover_text("Remove this via point.")
+                                .clicked()
+                            {
                                 actions.to_remove = Some(i);
                             }
                         });
                     }
                 });
 
-            if ui.button("+ Add Via Point").clicked() {
+            if ui
+                .button("+ Add Via Point")
+                .on_hover_text("Add another intermediate waypoint to the route.")
+                .clicked()
+            {
                 actions.add_via = true;
             }
 
             ui.add_space(4.0);
 
             ui.horizontal(|ui| {
-                ui.label("End:");
-                ui.text_edit_singleline(&mut app.end.text);
+                ui.label("End:")
+                    .on_hover_text("Route end point.");
+                ui.text_edit_singleline(&mut app.end.text)
+                    .on_hover_text(
+                        "Enter coordinates as \"lat, lon\" in decimal degrees, \
+                         e.g. 52.3731, 4.8934. You can also click on the map.",
+                    );
             });
 
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label("Velocity:");
-                ui.add(egui::TextEdit::singleline(&mut app.velocity).desired_width(60.0));
+                ui.label("Velocity:")
+                    .on_hover_text(
+                        "Simulated movement speed used to compute the transmit-point spacing.",
+                    );
+                ui.add(egui::TextEdit::singleline(&mut app.velocity).desired_width(60.0))
+                    .on_hover_text("Speed in km/h, e.g. 50.");
                 ui.label("km/h");
             });
 
@@ -1651,6 +1912,9 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
                         app.route_geojson_dialog.is_none(),
                         egui::Button::new(btn_label),
                     )
+                    .on_hover_text(
+                        "Select a GeoJSON file whose LineString geometry will be used as the route.",
+                    )
                     .clicked()
                 {
                     actions.open_geojson_dialog = true;
@@ -1660,8 +1924,12 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label("Velocity:");
-                ui.add(egui::TextEdit::singleline(&mut app.velocity).desired_width(60.0));
+                ui.label("Velocity:")
+                    .on_hover_text(
+                        "Simulated movement speed used to compute the transmit-point spacing.",
+                    );
+                ui.add(egui::TextEdit::singleline(&mut app.velocity).desired_width(60.0))
+                    .on_hover_text("Speed in km/h, e.g. 50.");
                 ui.label("km/h");
             });
         }
@@ -1719,8 +1987,12 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label("Velocity:");
-                ui.add(egui::TextEdit::singleline(&mut app.velocity).desired_width(60.0));
+                ui.label("Velocity:")
+                    .on_hover_text(
+                        "Simulated movement speed used to compute the transmit-point spacing.",
+                    );
+                ui.add(egui::TextEdit::singleline(&mut app.velocity).desired_width(60.0))
+                    .on_hover_text("Speed in km/h, e.g. 50.");
                 ui.label("km/h");
             });
         }
@@ -1737,11 +2009,13 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
                     .and_then(|p| p.file_name())
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "No file selected".to_owned());
-                ui.label(egui::RichText::new(file_label).monospace().weak());
+                ui.label(egui::RichText::new(file_label).monospace().weak())
+                    .on_hover_text("Currently imported GPX or KML file.");
                 let importing = app.draw_import_dialog.is_some();
                 let btn_label = if importing { "…" } else { "Browse…" };
                 if ui
                     .add_enabled(!importing, egui::Button::new(btn_label))
+                    .on_hover_text("Select a .gpx or .kml file to import its track as the route.")
                     .clicked()
                 {
                     actions.draw_open_import_dialog = true;
@@ -1763,8 +2037,12 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label("Velocity:");
-                ui.add(egui::TextEdit::singleline(&mut app.velocity).desired_width(60.0));
+                ui.label("Velocity:")
+                    .on_hover_text(
+                        "Simulated movement speed used to compute the transmit-point spacing.",
+                    );
+                ui.add(egui::TextEdit::singleline(&mut app.velocity).desired_width(60.0))
+                    .on_hover_text("Speed in km/h, e.g. 50.");
                 ui.label("km/h");
             });
         }
@@ -1782,6 +2060,11 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
         };
     if ui
         .add_enabled(can_generate, egui::Button::new("Generate User Motion File"))
+        .on_hover_text(
+            "Fetch the route, segmentize it at the given velocity, \
+             and write the ECEF transmit points to {route_name}.csv \
+             and the GeoJSON to {route_name}.geojson.",
+        )
         .clicked()
     {
         actions.do_generate = true;
@@ -1828,16 +2111,17 @@ struct WaypointPageActions {
 fn show_waypoints_page(app: &mut MyApp, ui: &mut egui::Ui) -> WaypointPageActions {
     let mut actions = WaypointPageActions::default();
 
-    ui.heading("Waypoint Manager");
-    ui.add_space(4.0);
+    page_heading(ui, "Waypoint Manager");
 
     ui.horizontal(|ui| {
-        ui.label("Filter:");
+        ui.label("Filter:")
+            .on_hover_text("Type to filter the waypoint list by name, location, or category.");
         ui.add(
             egui::TextEdit::singleline(&mut app.filter_text)
                 .hint_text("Search by name or location…")
                 .desired_width(220.0),
-        );
+        )
+        .on_hover_text("Filter waypoints by name, location, or category (case-insensitive).");
     });
 
     ui.add_space(4.0);
@@ -1892,7 +2176,11 @@ fn show_waypoints_page(app: &mut MyApp, ui: &mut egui::Ui) -> WaypointPageAction
 
     ui.add_space(8.0);
 
-    if ui.button("Save Changes").clicked() {
+    if ui
+        .button("Save Changes")
+        .on_hover_text("Persist all waypoints to disk (waypoint/ directory).")
+        .clicked()
+    {
         actions.save = true;
     }
 
@@ -1949,7 +2237,8 @@ fn sortable_header_text(
     let text = egui::RichText::new(format!("{label}{arrow}")).strong();
     let resp = ui
         .add(egui::Label::new(text).sense(egui::Sense::click()))
-        .on_hover_cursor(egui::CursorIcon::PointingHand);
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(format!("Click to sort by {label}. Click again to reverse order."));
     if resp.clicked() {
         if *sort_column == Some(col_idx) {
             *sort_ascending = !*sort_ascending;
@@ -2056,7 +2345,11 @@ fn show_waypoint_table(app: &mut MyApp, ui: &mut egui::Ui, actions: &mut Waypoin
 
                             let mut action_clicked = false;
                             row.col(|ui| {
-                                if ui.small_button("Edit").clicked() {
+                                if ui
+                                    .small_button("Edit")
+                                    .on_hover_text("Load this waypoint into the edit form below.")
+                                    .clicked()
+                                {
                                     actions.edit_index = orig_idx;
                                     actions.select_index = orig_idx;
                                     action_clicked = true;
@@ -2068,6 +2361,7 @@ fn show_waypoint_table(app: &mut MyApp, ui: &mut egui::Ui, actions: &mut Waypoin
                                         egui::RichText::new("Delete")
                                             .color(egui::Color32::from_rgb(200, 60, 60)),
                                     )
+                                    .on_hover_text("Permanently delete this waypoint.")
                                     .clicked()
                                 {
                                     actions.delete_index = orig_idx;
@@ -2091,24 +2385,40 @@ fn show_add_waypoint_form(app: &mut MyApp, ui: &mut egui::Ui) {
         .num_columns(2)
         .spacing([8.0, 6.0])
         .show(ui, |ui| {
-            ui.label("Coordinates (lat, lon):");
+            ui.label("Coordinates (lat, lon):")
+                .on_hover_text(
+                    "WGS-84 latitude and longitude in decimal degrees. \
+                     You can also click on the map to fill this field automatically.",
+                );
             ui.add(
                 egui::TextEdit::singleline(&mut app.new_waypoint_coords)
                     .hint_text("e.g. 52.3731, 4.8934")
                     .desired_width(220.0),
+            )
+            .on_hover_text(
+                "Enter as \"lat, lon\" in decimal degrees, e.g. 52.3731, 4.8934. \
+                 Or click on the map above.",
             );
             ui.end_row();
 
-            ui.label("Name:");
-            ui.text_edit_singleline(&mut app.new_waypoint.name);
+            ui.label("Name:")
+                .on_hover_text("Short identifying name for the waypoint.");
+            ui.text_edit_singleline(&mut app.new_waypoint.name)
+                .on_hover_text("A short, unique name for this waypoint.");
             ui.end_row();
 
-            ui.label("Location:");
-            ui.text_edit_singleline(&mut app.new_waypoint.location);
+            ui.label("Location:")
+                .on_hover_text("City, area, or place description for the waypoint.");
+            ui.text_edit_singleline(&mut app.new_waypoint.location)
+                .on_hover_text("Human-readable description of the location, e.g. \"Amsterdam, NL\".");
             ui.end_row();
 
-            ui.label("Category:");
-            ui.text_edit_singleline(&mut app.new_waypoint.category);
+            ui.label("Category:")
+                .on_hover_text("Tag used to group waypoints, e.g. \"Airport\", \"Home\", \"Test\".");
+            ui.text_edit_singleline(&mut app.new_waypoint.category)
+                .on_hover_text(
+                    "Category label for filtering and grouping, e.g. \"Airport\" or \"City\".",
+                );
             ui.end_row();
         });
 
@@ -2124,7 +2434,15 @@ fn show_add_waypoint_form(app: &mut MyApp, ui: &mut egui::Ui) {
         "Add Waypoint"
     };
 
-    if ui.button(btn_label).clicked() {
+    if ui
+        .button(btn_label)
+        .on_hover_text(if app.editing_index.is_some() {
+            "Save changes to the selected waypoint."
+        } else {
+            "Add a new waypoint to the list using the fields above."
+        })
+        .clicked()
+    {
         let wp = &app.new_waypoint;
         let all_fields_filled =
             !wp.name.is_empty() && !wp.location.is_empty() && !wp.category.is_empty();
@@ -2153,7 +2471,12 @@ fn show_add_waypoint_form(app: &mut MyApp, ui: &mut egui::Ui) {
         }
     }
 
-    if app.editing_index.is_some() && ui.button("Cancel Edit").clicked() {
+    if app.editing_index.is_some()
+        && ui
+            .button("Cancel Edit")
+            .on_hover_text("Discard edits and return to the Add New Waypoint form.")
+            .clicked()
+    {
         app.editing_index = None;
         app.new_waypoint = Waypoint::default();
         app.new_waypoint_coords = String::new();
@@ -2220,8 +2543,7 @@ fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> RouteLibraryActions {
             .map(|e| e.name.clone())
             .unwrap_or_default();
 
-        ui.heading(format!("Edit Route: {route_name}"));
-        ui.add_space(4.0);
+        page_heading(ui, &format!("Edit Route: {route_name}"));
         ui.label(
             egui::RichText::new(
                 "Drag vertices to reposition them.  Click on the map to add a point at the end.",
@@ -2234,13 +2556,18 @@ fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> RouteLibraryActions {
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if ui.button("Done").clicked() {
+            if ui
+                .button("Done")
+                .on_hover_text("Finish editing and return to the route library view.")
+                .clicked()
+            {
                 actions.done_editing = true;
             }
             if ui
                 .add_enabled(n >= 2, egui::Button::new("Open in Draw Route"))
                 .on_hover_text(
-                    "Transfer the edited route to Create UMF Route → Draw route",
+                    "Transfer the edited route to Create UMF Route → Draw route \
+                     so it can be re-segmentized and saved as a new CSV.",
                 )
                 .clicked()
             {
@@ -2288,10 +2615,8 @@ fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> RouteLibraryActions {
     }
 
     // ── Normal library view ───────────────────────────────────────────────────
-    ui.heading("Manage UMF Routes");
-    ui.add_space(4.0);
+    page_heading(ui, "Manage UMF Routes");
 
-    ui.add_space(6.0);
     ui.separator();
 
     show_library_table(app, ui, &mut actions);
@@ -2377,7 +2702,13 @@ fn show_library_table(app: &MyApp, ui: &mut egui::Ui, actions: &mut RouteLibrary
                                 ui.label(format!("{:.1} km/h", entry.velocity_kmh));
                             });
                             row.col(|ui| {
-                                if ui.small_button("Edit").clicked() {
+                                if ui
+                                    .small_button("Edit")
+                                    .on_hover_text(
+                                        "Open this route in the map editor to drag/add vertices.",
+                                    )
+                                    .clicked()
+                                {
                                     actions.edit_row = Some(i);
                                 }
                             });
@@ -2386,6 +2717,9 @@ fn show_library_table(app: &MyApp, ui: &mut egui::Ui, actions: &mut RouteLibrary
                                     .small_button(
                                         egui::RichText::new("Delete")
                                             .color(egui::Color32::from_rgb(200, 60, 60)),
+                                    )
+                                    .on_hover_text(
+                                        "Permanently delete this route's CSV and GeoJSON files.",
                                     )
                                     .clicked()
                                 {
