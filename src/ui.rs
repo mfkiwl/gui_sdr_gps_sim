@@ -1418,11 +1418,12 @@ fn ensure_map_tiles(app: &mut MyApp, ctx: &egui::Context) {
     }
 }
 
-/// Renders the OSM map widget and captures clicks via [`ClickCapturePlugin`].
+/// Renders the OSM map widget with waypoint markers and click capture.
 fn show_map_widget(
     map_tiles: &mut Option<HttpTiles>,
     map_memory: &mut walkers::MapMemory,
     map_clicked: &mut Option<crate::map_plugin::ClickResult>,
+    markers: &[(walkers::Position, egui::Color32)],
     ui: &mut egui::Ui,
 ) {
     let center = lat_lon(52.37308687621991, 4.893432625781817); // Amsterdam
@@ -1432,6 +1433,7 @@ fn show_map_widget(
         map_memory,
         center,
     )
+    .with_plugin(WaypointMarkerPlugin { markers })
     .with_plugin(ClickCapturePlugin { out: map_clicked });
 
     let available_width = ui.available_width();
@@ -1585,11 +1587,37 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
             ui.separator();
 
             // ── Map widget ────────────────────────────────────────────────────
+            // Build markers from the current text fields before taking mutable
+            // borrows on map_tiles / map_memory.
+            // Start = green, via = orange, end = red.
+            let mut markers: Vec<(walkers::Position, egui::Color32)> = Vec::new();
+            if let Ok(c) = crate::geo::parse_coords(&app.start.text) {
+                if let [lat, lon, ..] = c.as_slice() {
+                    markers.push((lat_lon(*lat, *lon), egui::Color32::from_rgb(50, 200, 50)));
+                }
+            }
+            for via in &app.viapoints {
+                if let Ok(c) = crate::geo::parse_coords(&via.text) {
+                    if let [lat, lon, ..] = c.as_slice() {
+                        markers.push((
+                            lat_lon(*lat, *lon),
+                            egui::Color32::from_rgb(255, 140, 0),
+                        ));
+                    }
+                }
+            }
+            if let Ok(c) = crate::geo::parse_coords(&app.end.text) {
+                if let [lat, lon, ..] = c.as_slice() {
+                    markers.push((lat_lon(*lat, *lon), egui::Color32::from_rgb(220, 50, 50)));
+                }
+            }
+
             ensure_map_tiles(app, ui.ctx());
             show_map_widget(
                 &mut app.map_tiles,
                 &mut app.map_memory,
                 &mut app.map_clicked,
+                &markers,
                 ui,
             );
             if app.map_clicked.is_some() {
@@ -1902,29 +1930,26 @@ fn show_wp_map_widget(
     add_map_zoom_controls(ui.ctx(), map_response.rect, "wp_map_zoom", map_memory);
 }
 
-/// Renders a clickable image header for a sortable table column.
+/// Renders a clickable bold text header for a sortable table column.
 ///
-/// Paints a red ▲/▼ indicator on the right side of the header when this column
-/// is the active sort column. Clicking toggles ascending/descending; clicking a
-/// new column resets to ascending.
-fn sortable_header_col(
+/// Appends a ▲ or ▼ to the label when this column is the active sort column.
+/// Clicking toggles ascending/descending; clicking a new column resets to ascending.
+fn sortable_header_text(
     ui: &mut egui::Ui,
-    src: egui::ImageSource<'_>,
+    label: &str,
     col_idx: usize,
     sort_column: &mut Option<usize>,
     sort_ascending: &mut bool,
 ) {
+    let arrow = if *sort_column == Some(col_idx) {
+        if *sort_ascending { " ▲" } else { " ▼" }
+    } else {
+        ""
+    };
+    let text = egui::RichText::new(format!("{label}{arrow}")).strong();
     let resp = ui
-        .add(
-            egui::Image::new(src)
-                .max_width(130.0)
-                .maintain_aspect_ratio(true)
-                .shrink_to_fit()
-                .corner_radius(10)
-                .sense(egui::Sense::click()),
-        )
+        .add(egui::Label::new(text).sense(egui::Sense::click()))
         .on_hover_cursor(egui::CursorIcon::PointingHand);
-
     if resp.clicked() {
         if *sort_column == Some(col_idx) {
             *sort_ascending = !*sort_ascending;
@@ -1933,22 +1958,11 @@ fn sortable_header_col(
             *sort_ascending = true;
         }
     }
-
-    if *sort_column == Some(col_idx) {
-        let arrow = if *sort_ascending { "^" } else { "v" };
-        ui.painter().text(
-            resp.rect.right_center() - egui::vec2(10.0, 0.0),
-            egui::Align2::CENTER_CENTER,
-            arrow,
-            egui::FontId::proportional(16.0),
-            egui::Color32::RED,
-        );
-    }
 }
 
 #[expect(
     clippy::too_many_lines,
-    reason = "table with 7 columns, image headers, and sort logic is inherently long"
+    reason = "table with 7 columns, sortable headers, and filter/sort snapshot logic is inherently long"
 )]
 fn show_waypoint_table(app: &mut MyApp, ui: &mut egui::Ui, actions: &mut WaypointPageActions) {
     // Build a filtered + sorted snapshot for display. Cloning avoids borrow
@@ -1994,80 +2008,34 @@ fn show_waypoint_table(app: &mut MyApp, ui: &mut egui::Ui, actions: &mut Waypoin
         .max_height(280.0)
         .show(ui, |ui| {
             egui_extras::TableBuilder::new(ui)
-                .column(Column::initial(140.0).at_least(140.0)) // Name
-                .column(Column::initial(140.0).at_least(140.0)) // Location
-                .column(Column::initial(140.0).at_least(140.0)) // Category
-                .column(Column::initial(140.0).at_least(140.0)) // Latitude
-                .column(Column::initial(140.0).at_least(140.0)) // Longitude
-                .column(Column::initial(140.0).at_least(140.0)) // Edit
-                .column(Column::initial(140.0).at_least(140.0)) // Delete
+                .column(Column::initial(160.0).at_least(100.0)) // Name
+                .column(Column::initial(160.0).at_least(100.0)) // Location
+                .column(Column::initial(120.0).at_least(80.0))  // Category
+                .column(Column::initial(100.0).at_least(70.0))  // Latitude
+                .column(Column::initial(100.0).at_least(70.0))  // Longitude
+                .column(Column::initial(60.0).at_least(50.0))   // Edit
+                .column(Column::initial(60.0).at_least(50.0))   // Delete
                 .sense(egui::Sense::click())
                 .resizable(true)
                 .striped(true)
-                .header(55.0, |mut row| {
+                .header(24.0, |mut row| {
                     row.col(|ui| {
-                        sortable_header_col(
-                            ui,
-                            egui::include_image!("../assets/img/h_name.png"),
-                            0,
-                            &mut app.sort_column,
-                            &mut app.sort_ascending,
-                        );
+                        sortable_header_text(ui, "Name", 0, &mut app.sort_column, &mut app.sort_ascending);
                     });
                     row.col(|ui| {
-                        sortable_header_col(
-                            ui,
-                            egui::include_image!("../assets/img/h_location.png"),
-                            1,
-                            &mut app.sort_column,
-                            &mut app.sort_ascending,
-                        );
+                        sortable_header_text(ui, "Location", 1, &mut app.sort_column, &mut app.sort_ascending);
                     });
                     row.col(|ui| {
-                        sortable_header_col(
-                            ui,
-                            egui::include_image!("../assets/img/h_category.png"),
-                            2,
-                            &mut app.sort_column,
-                            &mut app.sort_ascending,
-                        );
+                        sortable_header_text(ui, "Category", 2, &mut app.sort_column, &mut app.sort_ascending);
                     });
                     row.col(|ui| {
-                        sortable_header_col(
-                            ui,
-                            egui::include_image!("../assets/img/h_latitude.png"),
-                            3,
-                            &mut app.sort_column,
-                            &mut app.sort_ascending,
-                        );
+                        sortable_header_text(ui, "Latitude", 3, &mut app.sort_column, &mut app.sort_ascending);
                     });
                     row.col(|ui| {
-                        sortable_header_col(
-                            ui,
-                            egui::include_image!("../assets/img/h_longitude.png"),
-                            4,
-                            &mut app.sort_column,
-                            &mut app.sort_ascending,
-                        );
+                        sortable_header_text(ui, "Longitude", 4, &mut app.sort_column, &mut app.sort_ascending);
                     });
-                    row.col(|ui| {
-                        ui.add(
-                            egui::Image::new(egui::include_image!("../assets/img/h_edit.png"))
-                                .max_width(140.0)
-                                .maintain_aspect_ratio(true)
-                                .shrink_to_fit()
-                                .corner_radius(10),
-                        );
-                    });
-                    row.col(|ui| {
-                        ui.add(
-                            egui::Image::new(egui::include_image!("../assets/img/h_delete.png"))
-                                .max_width(140.0)
-                                .maintain_aspect_ratio(true)
-                                .shrink_to_fit()
-                                .corner_radius(10),
-                        );
-                    });
+                    row.col(|ui| { ui.strong("Edit"); });
+                    row.col(|ui| { ui.strong("Delete"); });
                 })
                 .body(|mut body| {
                     for waypoint in &display {
@@ -2088,14 +2056,20 @@ fn show_waypoint_table(app: &mut MyApp, ui: &mut egui::Ui, actions: &mut Waypoin
 
                             let mut action_clicked = false;
                             row.col(|ui| {
-                                if ui.button("Edit").clicked() {
+                                if ui.small_button("Edit").clicked() {
                                     actions.edit_index = orig_idx;
                                     actions.select_index = orig_idx;
                                     action_clicked = true;
                                 }
                             });
                             row.col(|ui| {
-                                if ui.button("Delete").clicked() {
+                                if ui
+                                    .small_button(
+                                        egui::RichText::new("Delete")
+                                            .color(egui::Color32::from_rgb(200, 60, 60)),
+                                    )
+                                    .clicked()
+                                {
                                     actions.delete_index = orig_idx;
                                     action_clicked = true;
                                 }
