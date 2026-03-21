@@ -1,0 +1,59 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+labels: ["enhancement"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! Please check the [open issues](https://github.com/okiedocus/gui_sdr_gps_sim/issues) first to avoid duplicates.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case or limitation that motivates this request.
+      placeholder: I want to simulate a receiver on a circular route that loops indefinitely, but currently...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe what you would like to see added or changed.
+      placeholder: Add a "loop route" checkbox on the Dynamic mode tab that restarts the UMF file from the beginning when it ends.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any other approaches you have tried or thought about.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the app does this affect?
+      multiple: true
+      options:
+        - GPS Simulator (Dynamic mode)
+        - GPS Simulator (Static mode)
+        - GPS Simulator (Interactive mode)
+        - GPS Simulator (Settings / SDR output)
+        - Create UMF Route
+        - Manage Waypoints
+        - Manage UMF Routes
+        - GNU Radio flow graphs
+        - Build / CI / release
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, links, or additional context that might help.

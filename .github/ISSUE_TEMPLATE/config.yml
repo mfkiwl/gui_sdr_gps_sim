@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/okiedocus/gui_sdr_gps_sim/security/advisories/new
+    about: Please report security issues privately via GitHub's private vulnerability reporting.

@@ -1,0 +1,71 @@
+name: Hardware Compatibility Report
+description: Report that the app works (or doesn't) with a specific SDR device or GPS receiver
+labels: ["hardware"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to share compatibility results with specific hardware — both successes and failures are useful.
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - "Works correctly"
+        - "Works with workaround"
+        - "Does not work"
+    validations:
+      required: true
+
+  - type: input
+    id: sdr
+    attributes:
+      label: SDR device
+      placeholder: e.g. HackRF One (firmware 2024.02.1)
+    validations:
+      required: true
+
+  - type: input
+    id: gps_receiver
+    attributes:
+      label: GPS receiver under test
+      description: The device receiving the simulated signal.
+      placeholder: e.g. u-blox NEO-M8N, Garmin GPSMAP 66i, iPhone 15 Pro
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system running the app
+      options:
+        - Windows
+        - Linux
+        - macOS
+    validations:
+      required: true
+
+  - type: input
+    id: app_version
+    attributes:
+      label: App version or commit
+      placeholder: e.g. v0.1.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: Test setup
+      description: How was the signal delivered to the GPS receiver? (e.g. antenna port directly connected via attenuator, over the air in a shielded box)
+      placeholder: HackRF TX antenna port → 30 dB attenuator → GPS receiver SMA input, inside a metal enclosure.
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Gain settings used, time to first fix, any quirks or workarounds required.
