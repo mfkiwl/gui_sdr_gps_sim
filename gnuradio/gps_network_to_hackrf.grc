@@ -1,0 +1,504 @@
+metadata:
+  file_format: 1
+  grc_version: 3.10.9.2
+
+options:
+  parameters:
+    author: gui_sdr_gps_sim
+    catch_exceptions: 'True'
+    category: '[GRC Hier Blocks]'
+    cmake_opt: ''
+    comment: ''
+    copyright: ''
+    description: Receive IQ from gui_sdr_gps_sim TCP/UDP output, visualize, retransmit
+      via HackRF
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: qt_gui
+    hier_block_src_path: '.:'
+    id: gps_network_to_hackrf
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: 'gui_sdr_gps_sim: Network Stream to HackRF TX'
+    window_size: (1280,900)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 8]
+    rotation: 0
+    state: enabled
+
+blocks:
+
+# ── Variables ──────────────────────────────────────────────────────────────────
+
+- name: center_freq
+  id: variable
+  parameters:
+    comment: GPS L1 C/A center frequency Hz
+    value: '1575420000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [200, 8]
+    rotation: 0
+    state: enabled
+
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: Must match app Sample Rate setting (default 3 MSPS)
+    value: '3000000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [360, 8]
+    rotation: 0
+    state: enabled
+
+- name: tcp_addr
+  id: variable
+  parameters:
+    comment: IP where the app is running (TCP server)
+    value: '"127.0.0.1"'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [520, 8]
+    rotation: 0
+    state: enabled
+
+- name: tcp_port
+  id: variable
+  parameters:
+    comment: Port set in app TCP output setting
+    value: '4568'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [680, 8]
+    rotation: 0
+    state: enabled
+
+- name: udp_port
+  id: variable
+  parameters:
+    comment: Port GR listens on (set app UDP address to 127.0.0.1:this_port)
+    value: '4567'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [840, 8]
+    rotation: 0
+    state: enabled
+
+- name: tx_gain
+  id: variable_qtgui_range
+  parameters:
+    comment: HackRF TX VGA gain
+    gui_hint: ''
+    label: TX VGA Gain (dB)
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: int
+    start: '0'
+    step: '1'
+    stop: '47'
+    value: '20'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1000, 8]
+    rotation: 0
+    state: enabled
+
+- name: fft_avg
+  id: variable_qtgui_range
+  parameters:
+    comment: FFT time-average (0=freeze 1=live)
+    gui_hint: ''
+    label: FFT Average alpha
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '0.01'
+    step: '0.01'
+    stop: '1.0'
+    value: '0.1'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [200, 80]
+    rotation: 0
+    state: enabled
+
+# ── Source: TCP (default) ──────────────────────────────────────────────────────
+# App is TCP SERVER — GR connects as client.
+# In the app: Output = TCP, port = tcp_port variable above.
+# To switch to UDP: disable this block and enable network_udp_source_0 below,
+# then re-wire its output to blocks_interleaved_char_to_complex_0 input.
+
+- name: network_tcp_source_0
+  id: network_tcp_source
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: "TCP client \u2014 connects to app TCP server.\nApp setting: Output\
+      \ = TCP, port = 4568."
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    notifyMissed: 'False'
+    addr: tcp_addr
+    port: tcp_port
+    server: 'False'
+    type: byte
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 220]
+    rotation: 0
+    state: disabled
+
+# ── Source: UDP (enabled by default) ──────────────────────────────────────────
+# To use: disable TCP source above, enable this block,
+# then connect its output to blocks_interleaved_char_to_complex_0 input (port 0).
+# App setting: Output = UDP, destination = 127.0.0.1:4567
+
+- name: network_udp_source_0
+  id: network_udp_source
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: "UDP source \u2014 GR listens, app sends datagrams.\nApp setting: Output\
+      \ = UDP, destination = 127.0.0.1:4567.\nDisabled by default \u2014 enable\
+      \ and disable TCP source to switch."
+    header: '0'
+    ipv6: 'False'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    notify_missed: 'False'
+    payloadsize: '32768'
+    port: udp_port
+    src_zeros: 'False'
+    type: byte
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 340]
+    rotation: 0
+    state: enabled
+
+# ── i8 bytes to complex float ──────────────────────────────────────────────────
+# Converts interleaved signed-byte IQ [I0,Q0,I1,Q1,...] to complex<float>.
+# scale_factor=1/128 normalises the i8 range (-128..127) to +-1.0.
+
+- name: blocks_interleaved_char_to_complex_0
+  id: blocks_interleaved_char_to_complex
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: "i8 interleaved IQ bytes \u2192 complex float \xB11.0\nscale = 1/128\
+      \ to normalise"
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    scale_factor: 1.0/128.0
+    vector_input: 'False'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [300, 244]
+    rotation: 0
+    state: enabled
+
+# ── FFT Spectrum sink ──────────────────────────────────────────────────────────
+
+- name: qtgui_freq_sink_x_0
+  id: qtgui_freq_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    autoscale: 'False'
+    average: fft_avg
+    axislabels: 'True'
+    bw: samp_rate
+    color1: '"cyan"'
+    comment: GPS L1 C/A appears as a 2 MHz wide noise hump at 1575.42 MHz
+    ctrlpanel: 'False'
+    fc: center_freq
+    fftsize: '4096'
+    freqhalf: 'True'
+    grid: 'True'
+    gui_hint: tabs@0
+    label: GPS L1 C/A Spectrum
+    label1: IQ stream
+    legend: 'True'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: '"GPS L1 C/A \u2014 FFT Spectrum"'
+    nconnections: '1'
+    norm_window: 'False'
+    showports: 'False'
+    type: complex
+    update_time: '0.05'
+    width1: '1'
+    wintype: window.WIN_BLACKMAN_hARRIS
+    ymax: '-40'
+    ymin: '-120'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [620, 140]
+    rotation: 0
+    state: enabled
+
+# ── Waterfall sink ─────────────────────────────────────────────────────────────
+
+- name: qtgui_waterfall_sink_x_0
+  id: qtgui_waterfall_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    axislabels: 'True'
+    bw: samp_rate
+    color1: '0'
+    comment: Time vs frequency heatmap
+    fc: center_freq
+    fftsize: '4096'
+    freqhalf: 'True'
+    grid: 'False'
+    gui_hint: tabs@1
+    int_max: '-40'
+    int_min: '-120'
+    label: ''
+    label1: ''
+    legend: 'True'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: '"GPS L1 C/A \u2014 Waterfall"'
+    nconnections: '1'
+    showports: 'False'
+    type: complex
+    update_time: '0.05'
+    wintype: window.WIN_BLACKMAN_hARRIS
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [620, 260]
+    rotation: 0
+    state: enabled
+
+# ── Decimator (3 MSPS -> 30 ksps) ─────────────────────────────────────────────
+
+- name: blocks_keep_one_in_n_0
+  id: blocks_keep_one_in_n
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Decimate 100x for time-domain scope
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    n: '100'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [460, 380]
+    rotation: 0
+    state: enabled
+
+# ── Time domain sink ───────────────────────────────────────────────────────────
+
+- name: qtgui_time_sink_x_0
+  id: qtgui_time_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha2: '1.0'
+    autoscale: 'True'
+    axislabels: 'True'
+    color1: cyan
+    color2: red
+    comment: I (cyan) and Q (red) after 100x decimation
+    ctrlpanel: 'False'
+    entags: 'True'
+    grid: 'True'
+    gui_hint: tabs@2
+    label1: I
+    label2: Q
+    legend: 'True'
+    marker1: '-1'
+    marker2: '-1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: '"GPS L1 C/A \u2014 Time Domain (dec x100)"'
+    nconnections: '1'
+    size: '1024'
+    srate: samp_rate/100
+    stemplot: 'False'
+    style1: '1'
+    style2: '1'
+    tr_chan: '0'
+    tr_delay: '0'
+    tr_level: '0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.1'
+    width1: '1'
+    width2: '1'
+    ylabel: Amplitude
+    ymax: '1.5'
+    ymin: '-1.5'
+    yunit: '"norm."'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [640, 380]
+    rotation: 0
+    state: enabled
+
+# ── Constellation sink ─────────────────────────────────────────────────────────
+
+- name: qtgui_const_sink_x_0
+  id: qtgui_const_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '0.4'
+    autoscale: 'False'
+    axislabels: 'True'
+    comment: I vs Q scatter. GPS C/A is noise-like without a correlator.
+    grid: 'True'
+    gui_hint: tabs@3
+    label1: GPS L1
+    legend: 'True'
+    marker1: '0'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: '"GPS L1 C/A \u2014 Constellation"'
+    nconnections: '1'
+    showports: 'False'
+    size: '8192'
+    style1: '0'
+    tr_chan: '0'
+    tr_level: '0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.1'
+    xmax: '1.5'
+    xmin: '-1.5'
+    ymax: '1.5'
+    ymin: '-1.5'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [620, 500]
+    rotation: 0
+    state: enabled
+
+# ── HackRF TX via osmosdr ──────────────────────────────────────────────────────
+
+- name: osmosdr_sink_0
+  id: osmosdr_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    ant0: ''
+    args: hackrf=0
+    bandwidth0: samp_rate
+    bb_gain0: '0'
+    center_freq0: center_freq
+    comment: "HackRF One TX @ GPS L1 1575.42 MHz.\nif_gain0 = tx_gain slider (TX\
+      \ VGA, 0\u201347 dB).\ngain0 = 0 (amp off) or 14 (amp on).\nNOTE: GRC osmosdr\
+      \ template may hardcode 100 MHz \u2014 the generated .py fixes this to center_freq."
+    corr0: '0'
+    freq_corr0: '0'
+    gain0: '0'
+    if_gain0: tx_gain
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    norm_gain0: 'False'
+    num_chans: '1'
+    sample_rate: samp_rate
+    sync: none
+    type: fc32
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [900, 220]
+    rotation: 0
+    state: enabled
+
+# ── Tab widget ─────────────────────────────────────────────────────────────────
+
+- name: tabs
+  id: qtgui_tab_widget
+  parameters:
+    alias: ''
+    comment: ''
+    gui_hint: 1,0,1,1
+    label0: FFT Spectrum
+    label1: Waterfall
+    label2: Time Domain
+    label3: Constellation
+    label4: Tab 4
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_tabs: '4'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [620, 60]
+    rotation: 0
+    state: enabled
+
+connections:
+# UDP source -> converter (default — GR listens on udp_port, app sends here)
+- [network_udp_source_0, '0', blocks_interleaved_char_to_complex_0, '0']
+
+# i8 bytes -> complex float -> displays
+- [blocks_interleaved_char_to_complex_0, '0', qtgui_freq_sink_x_0, '0']
+- [blocks_interleaved_char_to_complex_0, '0', qtgui_waterfall_sink_x_0, '0']
+- [blocks_interleaved_char_to_complex_0, '0', blocks_keep_one_in_n_0, '0']
+- [blocks_keep_one_in_n_0, '0', qtgui_time_sink_x_0, '0']
+- [blocks_interleaved_char_to_complex_0, '0', qtgui_const_sink_x_0, '0']
+
+# complex float -> HackRF TX
+- [blocks_interleaved_char_to_complex_0, '0', osmosdr_sink_0, '0']

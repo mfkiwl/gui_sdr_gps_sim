@@ -1,5 +1,7 @@
 #![warn(clippy::all, rust_2018_idioms)]
 
+pub mod gps_sim;
+
 mod app;
 mod geo;
 mod library;

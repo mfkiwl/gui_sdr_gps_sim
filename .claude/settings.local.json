@@ -18,7 +18,17 @@
       "Bash(cargo:*)",
       "WebFetch(domain:giscience.github.io)",
       "WebFetch(domain:api.openrouteservice.org)",
-      "WebFetch(domain:openrouteservice.org)"
+      "WebFetch(domain:openrouteservice.org)",
+      "Bash(grep -v \"//\")",
+      "Bash(1)",
+      "Bash(sort -t: -k2 -n)",
+      "Bash(taskkill /F /IM gui_sdr_gps_sim.exe)",
+      "Bash(find C:/Users/mail/.cargo/registry/src -name slider.rs -path */egui*)",
+      "Bash(python3 -c \"import gnuradio; print\\(gnuradio.__version__\\)\")",
+      "WebFetch(domain:wiki.gnuradio.org)",
+      "WebFetch(domain:www.gnuradio.org)",
+      "Bash(ls -la /e/Projecten/gui_sdr_gps_sim/*.html)",
+      "Bash(grep -r -i \"wasm\\\\|trunk\" /e/Projecten/gui_sdr_gps_sim/*.toml /e/Projecten/gui_sdr_gps_sim/*.md /e/Projecten/gui_sdr_gps_sim/*.sh)"
     ]
   }
 }

@@ -23,26 +23,20 @@ cargo fmt --all
 # Lint (must pass with zero warnings)
 cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all
 
-# Check WASM target compiles
-cargo check --workspace --all-features --lib --target wasm32-unknown-unknown
-
-# Build WASM (requires trunk: cargo install trunk)
-trunk build
-
 # Run all CI checks locally (equivalent to CI pipeline)
 bash check.sh
 ```
 
 ## Architecture
 
-Cross-platform desktop + WASM GUI app using [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui). Crate name: `gui_sdr_gps_sim`. Rust toolchain pinned to **1.88**, edition **2024**. Default window size is **1100×750**, minimum **700×500**.
+Cross-platform desktop GUI app using [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui). Crate name: `gui_sdr_gps_sim`. Rust toolchain pinned to **1.88**, edition **2024**. Default window size is **1100×750**, minimum **700×500**.
 
 **Module layout:**
 
 | File / dir | Responsibility |
 |---|---|
 | `src/main.rs` | Native entry point — window config, icon, image loaders, `setup_fonts()` (loads system symbol font as fallback for ▲▼) |
-| `src/lib.rs` | Module declarations; re-exports `MyApp` for the WASM build |
+| `src/lib.rs` | Module declarations; re-exports `MyApp` |
 | `src/app.rs` | `MyApp` struct, `AppPage` / `AppStatus` enums, `Default`, `eframe::App` |
 | `src/ui.rs` | All UI rendering — delegates from `eframe::App::update` |
 | `src/waypoint.rs` | `Waypoint` / `WaypointEntry` types; free-fn `load_waypoints` / `save_waypoints` |
@@ -53,7 +47,8 @@ Cross-platform desktop + WASM GUI app using [egui](https://github.com/emilk/egui
 | `src/route/geojson.rs` | Serde types for the GeoJSON API response |
 | `src/simulator/mod.rs` | Public API of the simulator module; also hosts `open_file_dialog()` |
 | `src/simulator/state.rs` | `SimSettings`, `SimState`, `SimStatus` — shared between worker and UI |
-| `src/simulator/worker.rs` | `run()` — spawns GPS signal generation loop + HackRF TX consumer thread |
+| `src/simulator/worker.rs` | `run()` / `run_static_loop()` — thin wrappers that delegate to `gps_sim::Simulator` |
+| `src/gps_sim/` | GPS L1 C/A baseband signal simulator. Sub-modules: `types`, `coords`, `orbit`, `ionosphere`, `troposphere`, `codegen`, `navmsg`, `rinex`, `signal`, `fifo`, `hackrf`, `channel` (private), `sim` (private). Public entry point: `Simulator::builder()` |
 | `src/rinex.rs` | Downloads today's broadcast RINEX nav file from CDDIS via anonymous FTPS |
 | `src/map_plugin.rs` | walkers `Plugin` impls: `ClickCapturePlugin`, `WaypointMarkerPlugin`, `RouteLinePlugin`, `EditableRoutePlugin`, `PolylinePlugin` |
 | `src/paths.rs` | `umf_dir()` / `waypoint_dir()` — create and return well-known working directories |
@@ -70,11 +65,15 @@ Cross-platform desktop + WASM GUI app using [egui](https://github.com/emilk/egui
 **Data flow for GPS simulation:**
 
 1. User selects a RINEX nav file (or downloads today's from CDDIS via `rinex::blocking_download()` run in a `std::thread::spawn`) and a UMF motion file, then clicks "Start".
-2. The UI spawns a dedicated OS thread running `simulator::run()`.
-3. `worker::do_run()` builds a `gps::SignalGenerator`, opens `HackRF` on GPS L1 (1 575.42 MHz), then feeds 100 ms IQ blocks through an `mpsc::sync_channel` to a second thread that writes to HackRF via USB.
-4. Progress (`current_step`, `bytes_sent`) and final status (`Done`/`Stopped`/`Error`) are communicated back via `Arc<Mutex<SimState>>`. The UI polls this each frame.
-5. The user can cancel at any time via `Arc<AtomicBool>` stop flag.
-6. Dynamic Mode shows a live-tracking map: `interpolate_route_pos()` in `ui.rs` derives the current geographic position from `current_step / total_steps` and centers the map on it each frame.
+2. The UI spawns a dedicated OS thread running `simulator::worker::run()` (dynamic route) or `run_static_loop()` (fixed position).
+3. `worker` calls `gps_sim::Simulator::builder()` with RINEX path, location/motion-file, output target, stop flag, and an `on_event` callback, then calls `.run()`.
+4. Inside `gps_sim`, the signal chain is: RINEX → ephemeris → channel allocator (≤12 SVs) → 100 ms IQ accumulation loop → FIFO (8 × 262 KB) → TX thread → HackRF / IQ file / UDP / TCP / Null.
+5. The `on_event` callback translates `SimEvent::Progress` into `SimState` updates (`current_step`, `total_steps`, `bytes_sent`). The UI polls `Arc<Mutex<SimState>>` each frame.
+6. The user can cancel at any time via `Arc<AtomicBool>` stop flag passed to the simulator.
+7. Static mode loops indefinitely (each pass re-creates the `Simulator`); `SimState::loop_count` tracks iterations.
+8. Dynamic Mode shows a live-tracking map: `interpolate_route_pos()` in `ui.rs` derives the current geographic position from `current_step / total_steps` and centers the map on it each frame.
+
+**`SdrOutput` variants** (defined in `gps_sim/mod.rs`): `HackRf { gain_db, amp }`, `IqFile { path }`, `Null`, `PlutoSdr { host, gain_db }`, `UdpStream { addr }`, `TcpServer { port }`.
 
 **UI rendering pattern:**
 
@@ -123,5 +122,4 @@ Clippy runs as `-D warnings`; any new warning is a build failure. Run `cargo cli
 
 ## Platform targets
 
-- Native: Windows (x86_64-pc-windows-msvc), Linux (x86_64, ARM), macOS (aarch64, x86_64)
-- Web: `wasm32-unknown-unknown` built with [Trunk](https://trunkrs.dev/); deployed to GitHub Pages
+- Windows (x86_64-pc-windows-msvc), Linux (x86_64, ARM), macOS (aarch64, x86_64)

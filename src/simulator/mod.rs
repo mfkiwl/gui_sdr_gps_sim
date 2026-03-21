@@ -1,13 +1,13 @@
 //! GPS signal simulation module.
 //!
-//! Wraps the `gps` and `libhackrf` crates into a self-contained module
-//! that exposes types and functions consumed by the UI layer.
+//! Exposes types and functions consumed by the UI layer.
 
 mod state;
 mod worker;
 
-pub use state::{SimSettings, SimState, SimStatus};
-pub use worker::{GPS_L1_HZ, run, run_static_loop};
+#[expect(unused_imports, reason = "SimSatInfo is part of the public API, consumed by external callers reading SimState::satellites")]
+pub use state::{SimSettings, SimState, SimStatus, SimOutputType, SimSatInfo};
+pub use worker::{GPS_L1_HZ, GPS_SAMPLE_RATE_HZ, run, run_static_loop, run_interactive};
 
 use std::{path::PathBuf, sync::mpsc, thread};
 

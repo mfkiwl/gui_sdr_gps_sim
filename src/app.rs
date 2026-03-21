@@ -45,6 +45,8 @@ pub enum SimTab {
     Dynamic,
     /// Single fixed-position looping simulation (static coordinates).
     Static,
+    /// Real-time keyboard-steered receiver position.
+    Interactive,
     /// Shared simulation and `HackRF` hardware settings for both simulators.
     Settings,
 }
@@ -252,6 +254,10 @@ pub struct MyApp {
     #[serde(skip)]
     pub sim_stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 
+    /// Flag set by the UI to pause the dynamic simulation at the current route position (not persisted).
+    #[serde(skip)]
+    pub sim_pause_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+
     /// Handle to the simulation worker thread (not persisted).
     #[serde(skip)]
     pub sim_thread: Option<std::thread::JoinHandle<()>>,
@@ -308,6 +314,99 @@ pub struct MyApp {
     /// Human-readable error from the last failed RINEX download for the static simulator (not persisted).
     #[serde(skip)]
     pub sim_static_rinex_dl_error: Option<String>,
+
+    // ── Interactive GPS Simulator ──────────────────────────────────────────────
+    /// Path to the RINEX navigation file for the interactive simulator (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_rinex_path: Option<std::path::PathBuf>,
+
+    /// Pending RINEX file-dialog receiver for the interactive simulator (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_rinex_dialog: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
+
+    /// Receives the result of a RINEX download for the interactive simulator (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_rinex_download: Option<std::sync::mpsc::Receiver<Result<std::path::PathBuf, String>>>,
+
+    /// Human-readable error from the last failed RINEX download for the interactive simulator (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_rinex_dl_error: Option<String>,
+
+    /// WGS-84 starting latitude in decimal degrees (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_lat: String,
+
+    /// WGS-84 starting longitude in decimal degrees (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_lon: String,
+
+    /// Starting height above WGS-84 ellipsoid in metres (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_alt: String,
+
+    /// Shared simulation state polled by the UI for the interactive simulator (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_state: std::sync::Arc<std::sync::Mutex<crate::simulator::SimState>>,
+
+    /// Flag set by the UI to request the interactive simulation to stop (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+
+    /// Handle to the interactive simulation worker thread (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_thread: Option<std::thread::JoinHandle<()>>,
+
+    /// Shared interactive state updated by egui key events and consumed by the simulator (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_istate: std::sync::Arc<std::sync::Mutex<crate::gps_sim::InteractiveState>>,
+
+    /// HTTP tile fetcher for the interactive-tab map (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_map_tiles: Option<walkers::HttpTiles>,
+
+    /// Pan/zoom state for the interactive-tab map (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_map_memory: walkers::MapMemory,
+
+    /// Most recent click on the interactive-tab map (not persisted).
+    #[serde(skip)]
+    pub sim_interactive_map_clicked: Option<crate::map_plugin::ClickResult>,
+
+    /// Oscillator PPB offset (not persisted).
+    #[serde(skip)]
+    pub sim_ppb: i32,
+
+    /// Minimum elevation mask angle in degrees (not persisted).
+    #[serde(skip)]
+    pub sim_elevation_mask: f64,
+
+    /// Space-separated or comma-separated PRNs to block, e.g. "5,12,23" (not persisted).
+    #[serde(skip)]
+    pub sim_blocked_prns: String,
+
+    /// Whether to write a position log file (not persisted).
+    #[serde(skip)]
+    pub sim_log_enable: bool,
+
+    /// Path for the position log CSV file (not persisted).
+    #[serde(skip)]
+    pub sim_log_path: String,
+
+    /// Output sink type (not persisted).
+    #[serde(skip)]
+    pub sim_output_type: crate::simulator::SimOutputType,
+
+    /// Path for IQ file output (not persisted).
+    #[serde(skip)]
+    pub sim_iq_file_path: String,
+
+    /// UDP destination address for UDP output (not persisted).
+    #[serde(skip)]
+    pub sim_udp_addr: String,
+
+    /// TCP server port for TCP output (not persisted).
+    #[serde(skip)]
+    pub sim_tcp_port: u16,
 
     // ── Static tab waypoint picker ─────────────────────────────────────────────
     /// Index of the currently selected waypoint row on the static-tab picker (not persisted).
@@ -457,7 +556,7 @@ impl Default for MyApp {
             sim_motion_dialog: None,
             sim_txvga_gain: 20,
             sim_amp_enable: false,
-            sim_frequency: 2_600_000,
+            sim_frequency: crate::simulator::GPS_SAMPLE_RATE_HZ,
             sim_start_time: String::new(),
             sim_time_override: false,
             sim_ionospheric_disable: false,
@@ -474,6 +573,7 @@ impl Default for MyApp {
                 crate::simulator::SimState::default(),
             )),
             sim_stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            sim_pause_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             sim_thread: None,
             sim_rinex_download: None,
             sim_rinex_dl_error: None,
@@ -492,6 +592,35 @@ impl Default for MyApp {
             sim_static_thread: None,
             sim_static_rinex_download: None,
             sim_static_rinex_dl_error: None,
+            sim_interactive_rinex_path: crate::rinex::today_rinex_path().filter(|p| p.exists()),
+            sim_interactive_rinex_dialog: None,
+            sim_interactive_rinex_download: None,
+            sim_interactive_rinex_dl_error: None,
+            sim_interactive_lat: String::new(),
+            sim_interactive_lon: String::new(),
+            sim_interactive_alt: "10.0".to_owned(),
+            sim_interactive_state: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::simulator::SimState::default(),
+            )),
+            sim_interactive_stop_flag: std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            ),
+            sim_interactive_thread: None,
+            sim_interactive_istate: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::gps_sim::InteractiveState::default(),
+            )),
+            sim_interactive_map_tiles: None,
+            sim_interactive_map_memory: walkers::MapMemory::default(),
+            sim_interactive_map_clicked: None,
+            sim_ppb: 0,
+            sim_elevation_mask: 0.0,
+            sim_blocked_prns: String::new(),
+            sim_log_enable: false,
+            sim_log_path: String::new(),
+            sim_output_type: crate::simulator::SimOutputType::HackRf,
+            sim_iq_file_path: "output.iq".to_owned(),
+            sim_udp_addr: "127.0.0.1:4567".to_owned(),
+            sim_tcp_port: 4567,
             sim_static_wp_selected_row: None,
             sim_static_map_tiles: None,
             sim_static_map_memory: walkers::MapMemory::default(),
@@ -894,6 +1023,17 @@ impl MyApp {
         });
     }
 
+    /// Spawns a background thread to download today's RINEX file for the interactive simulator.
+    pub fn download_rinex_interactive(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.sim_interactive_rinex_download = Some(rx);
+        self.sim_interactive_rinex_dl_error = None;
+        let (doy, year) = crate::rinex::today_doy_year();
+        std::thread::spawn(move || {
+            tx.send(crate::rinex::blocking_download(doy, year)).ok();
+        });
+    }
+
     /// Spawns the static looping simulation worker thread.
     ///
     /// Resets shared state, builds [`crate::simulator::SimSettings`] from current
@@ -945,6 +1085,20 @@ impl MyApp {
                 self.sim_leap_day,
                 self.sim_leap_delta,
             )),
+            ppb: self.sim_ppb,
+            elevation_mask_deg: self.sim_elevation_mask,
+            blocked_prns: parse_blocked_prns(&self.sim_blocked_prns),
+            log_path: self.sim_log_enable.then(|| {
+                if self.sim_log_path.trim().is_empty() {
+                    "sim_position_log.csv".to_owned()
+                } else {
+                    self.sim_log_path.trim().to_owned()
+                }
+            }),
+            output_type: self.sim_output_type.clone(),
+            iq_file_path: self.sim_iq_file_path.clone(),
+            udp_addr: self.sim_udp_addr.clone(),
+            tcp_port: self.sim_tcp_port,
         };
 
         let state = std::sync::Arc::clone(&self.sim_static_state);
@@ -960,6 +1114,93 @@ impl MyApp {
                 &settings,
                 &state,
                 &stop,
+            );
+        }));
+    }
+
+    /// Spawns the interactive simulation worker thread.
+    ///
+    /// Resets shared state, builds [`crate::simulator::SimSettings`] from current
+    /// UI values, resets the [`crate::gps_sim::InteractiveState`] to zero, and
+    /// spawns a thread that runs the GPS signal generator driven by egui key events
+    /// until the stop flag is set.
+    pub fn start_interactive_simulation(&mut self) {
+        use std::sync::atomic::Ordering;
+
+        #[expect(
+            clippy::unwrap_used,
+            reason = "mutex poison means a prior panic; reset is best-effort"
+        )]
+        {
+            *self.sim_interactive_state.lock().unwrap() = crate::simulator::SimState {
+                status: crate::simulator::SimStatus::Running,
+                ..crate::simulator::SimState::default()
+            };
+            *self.sim_interactive_istate.lock().unwrap() =
+                crate::gps_sim::InteractiveState::default();
+        }
+        self.sim_interactive_stop_flag.store(false, Ordering::Relaxed);
+
+        let rinex_path = self
+            .sim_interactive_rinex_path
+            .clone()
+            .expect("start_interactive_simulation requires sim_interactive_rinex_path; caller must check");
+
+        let lat: f64 = self.sim_interactive_lat.trim().parse().unwrap_or(0.0);
+        let lon: f64 = self.sim_interactive_lon.trim().parse().unwrap_or(0.0);
+        let alt: f64 = self.sim_interactive_alt.trim().parse().unwrap_or(10.0);
+
+        let settings = crate::simulator::SimSettings {
+            frequency: self.sim_frequency,
+            txvga_gain: self.sim_txvga_gain,
+            amp_enable: self.sim_amp_enable,
+            start_time: if self.sim_start_time.trim().is_empty() {
+                None
+            } else {
+                Some(self.sim_start_time.trim().to_owned())
+            },
+            time_override: self.sim_time_override,
+            ionospheric_disable: self.sim_ionospheric_disable,
+            fixed_gain: self.sim_fixed_gain_enable.then_some(self.sim_fixed_gain),
+            center_frequency: self.sim_center_freq,
+            baseband_filter: self
+                .sim_baseband_filter_enable
+                .then_some(self.sim_baseband_filter),
+            leap: self.sim_leap_enable.then_some((
+                self.sim_leap_week,
+                self.sim_leap_day,
+                self.sim_leap_delta,
+            )),
+            ppb: self.sim_ppb,
+            elevation_mask_deg: self.sim_elevation_mask,
+            blocked_prns: parse_blocked_prns(&self.sim_blocked_prns),
+            log_path: self.sim_log_enable.then(|| {
+                if self.sim_log_path.trim().is_empty() {
+                    "sim_position_log.csv".to_owned()
+                } else {
+                    self.sim_log_path.trim().to_owned()
+                }
+            }),
+            output_type: self.sim_output_type.clone(),
+            iq_file_path: self.sim_iq_file_path.clone(),
+            udp_addr: self.sim_udp_addr.clone(),
+            tcp_port: self.sim_tcp_port,
+        };
+
+        let state  = std::sync::Arc::clone(&self.sim_interactive_state);
+        let stop   = std::sync::Arc::clone(&self.sim_interactive_stop_flag);
+        let istate = std::sync::Arc::clone(&self.sim_interactive_istate);
+
+        self.sim_interactive_thread = Some(std::thread::spawn(move || {
+            crate::simulator::run_interactive(
+                &rinex_path,
+                lat,
+                lon,
+                alt,
+                &settings,
+                &state,
+                &stop,
+                istate,
             );
         }));
     }
@@ -1097,14 +1338,39 @@ impl MyApp {
                 self.sim_leap_day,
                 self.sim_leap_delta,
             )),
+            ppb: self.sim_ppb,
+            elevation_mask_deg: self.sim_elevation_mask,
+            blocked_prns: parse_blocked_prns(&self.sim_blocked_prns),
+            log_path: self.sim_log_enable.then(|| {
+                if self.sim_log_path.trim().is_empty() {
+                    "sim_position_log.csv".to_owned()
+                } else {
+                    self.sim_log_path.trim().to_owned()
+                }
+            }),
+            output_type: self.sim_output_type.clone(),
+            iq_file_path: self.sim_iq_file_path.clone(),
+            udp_addr: self.sim_udp_addr.clone(),
+            tcp_port: self.sim_tcp_port,
         };
         let state = std::sync::Arc::clone(&self.sim_state);
-        let stop = std::sync::Arc::clone(&self.sim_stop_flag);
+        let stop  = std::sync::Arc::clone(&self.sim_stop_flag);
+        let pause = std::sync::Arc::clone(&self.sim_pause_flag);
+        // Reset pause flag when starting a new simulation.
+        pause.store(false, std::sync::atomic::Ordering::Relaxed);
 
         self.sim_thread = Some(std::thread::spawn(move || {
-            crate::simulator::run(&rinex_path, &motion_path, &settings, &state, &stop);
+            crate::simulator::run(&rinex_path, &motion_path, &settings, &state, &stop, &pause);
         }));
     }
+}
+
+/// Parse a comma-/space-separated list of PRN numbers (1–32) into a `Vec<u8>`.
+fn parse_blocked_prns(s: &str) -> Vec<u8> {
+    s.split(|c: char| c == ',' || c.is_whitespace())
+        .filter_map(|token| token.trim().parse::<u8>().ok())
+        .filter(|&prn| (1..=32).contains(&prn))
+        .collect()
 }
 
 impl eframe::App for MyApp {

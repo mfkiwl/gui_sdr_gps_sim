@@ -5,457 +5,384 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
-    thread,
-    time::Duration,
 };
-
-use gps::SignalGeneratorBuilder;
-use libhackrf::prelude::*;
 
 use super::state::{SimSettings, SimState, SimStatus};
 
 /// GPS L1 C/A centre frequency in Hz — the default when no override is set.
 pub const GPS_L1_HZ: u64 = 1_575_420_000;
 
+/// IQ sample rate used by the GPS simulator (Hz).
+///
+/// Mirrors `gps_sim::types::consts::SAMPLE_RATE`.
+pub const GPS_SAMPLE_RATE_HZ: usize = 3_000_000;
+
+// ── Public entry-points ───────────────────────────────────────────────────────
+
 /// Entry point for the static-position looping simulator.
 ///
-/// Builds a [`gps::SignalGenerator`] at a fixed lat/lon/alt, opens the `HackRF`,
-/// and streams I/Q samples indefinitely by re-initialising the generator at the
-/// start of every pass until the stop flag is set.
+/// Runs the GPS L1 C/A signal generation in a loop until `stop` is set.
+/// Each pass simulates `loop_duration` seconds of signal at the given position.
 #[expect(
     clippy::too_many_arguments,
     reason = "lat/lon/alt cannot be bundled into SimSettings without polluting the dynamic-mode path"
 )]
 pub fn run_static_loop(
-    rinex_path: &Path,
-    lat: f64,
-    lon: f64,
-    alt: f64,
+    rinex_path:    &Path,
+    lat:           f64,
+    lon:           f64,
+    alt:           f64,
     loop_duration: f64,
-    settings: &SimSettings,
-    state: &Arc<Mutex<SimState>>,
-    stop: &Arc<AtomicBool>,
+    settings:      &SimSettings,
+    state:         &Arc<Mutex<SimState>>,
+    stop:          &Arc<AtomicBool>,
 ) {
-    match do_run_static(rinex_path, lat, lon, alt, loop_duration, settings, state, stop) {
-        Ok(()) => {
-            #[expect(clippy::unwrap_used, reason = "mutex poison means the UI thread panicked; further recovery is not meaningful")]
-            let mut s = state.lock().unwrap();
-            if s.status == SimStatus::Running {
-                s.status = SimStatus::Done;
-            }
-        }
-        Err(e) => {
-            #[expect(clippy::unwrap_used, reason = "mutex poison means the UI thread panicked; further recovery is not meaningful")]
-            let mut s = state.lock().unwrap();
-            if stop.load(Ordering::Relaxed) {
-                s.status = SimStatus::Stopped;
-            } else if s.status == SimStatus::Running {
-                s.status = SimStatus::Error;
-                if s.error.is_none() {
-                    s.error = Some(e.to_string());
-                }
-            }
-        }
-    }
+    run_static_loop_native(rinex_path, lat, lon, alt, loop_duration, settings, state, stop);
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "linear pipeline: builder setup, HackRF config, FIFO channel, looping producer, teardown"
-)]
+/// Entry point for the interactive simulator.
+///
+/// Runs in a dedicated thread until `stop` is set.  The caller holds a clone
+/// of `istate` and updates it each UI frame from keyboard/gamepad events;
+/// the simulator reads it every 100 ms to derive the next receiver position.
 #[expect(
     clippy::too_many_arguments,
-    reason = "lat/lon/alt cannot be bundled into SimSettings without polluting the dynamic-mode path"
+    reason = "starting position components cannot be bundled without polluting other modes"
 )]
-fn do_run_static(
+pub fn run_interactive(
     rinex_path: &Path,
-    lat: f64,
-    lon: f64,
-    alt: f64,
-    loop_duration: f64,
-    settings: &SimSettings,
-    state: &Arc<Mutex<SimState>>,
-    stop: &Arc<AtomicBool>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // 1. Build the signal generator for a fixed static position.
-    let start_time = settings.start_time.as_deref().map(|s| {
-        if s.eq_ignore_ascii_case("now") {
-            "now".to_owned()
-        } else {
-            let mut iso = s.replace('/', "-").replace(',', "T");
-            iso.push('Z');
-            iso
-        }
-    });
-
-    let leap = settings
-        .leap
-        .map(|(week, day, delta)| vec![week, day, delta]);
-
-    let mut generator = SignalGeneratorBuilder::default()
-        .navigation_file(Some(rinex_path.to_path_buf()))?
-        .location(Some(vec![lat, lon, alt]))?
-        .duration(Some(loop_duration))
-        .data_format(Some(8))?
-        .frequency(Some(settings.frequency))?
-        .time(start_time)?
-        .time_override(Some(settings.time_override))
-        .ionospheric_disable(Some(settings.ionospheric_disable))
-        .path_loss(settings.fixed_gain)
-        .leap(leap)
-        .verbose(Some(false))
-        .build()?;
-
-    // 2. Open and configure HackRF.
-    let mut sdr = HackRF::new_auto()?;
-    sdr.set_freq(settings.center_frequency)?;
-    sdr.set_sample_rate_auto(settings.frequency as f64)?;
-    if let Some(bw) = settings.baseband_filter {
-        sdr.set_baseband_filter_bandwidth(bw)?;
-    }
-    sdr.set_txvga_gain(settings.txvga_gain)?;
-    sdr.set_amp_enable(settings.amp_enable)?;
-    sdr.enter_tx_mode()?;
-
-    // 3. FIFO channel: generator (producer) → HackRF thread (consumer).
-    //    Capacity of 8 blocks ≈ 8 × 520 KB ≈ 4 MB of lookahead.
-    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(8);
-
-    let hackrf_err: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let hackrf_err_t = Arc::clone(&hackrf_err);
-    let state_t = Arc::clone(state);
-
-    // 4. HackRF consumer thread — persists across all loop passes.
-    let hackrf_thread = thread::spawn(move || {
-        let mut endpoint = match sdr.tx_queue() {
-            Ok(ep) => ep,
-            Err(e) => {
-                #[expect(clippy::unwrap_used, reason = "mutex poison means simulation thread panicked; unrecoverable")]
-                {
-                    *hackrf_err_t.lock().unwrap() = Some(e.to_string());
-                }
-                return;
-            }
-        };
-
-        let mut chunk = vec![0u8; HACKRF_TRANSFER_BUFFER_SIZE];
-
-        while let Ok(block) = rx.recv() {
-            for window in block.chunks(HACKRF_TRANSFER_BUFFER_SIZE) {
-                let n = window.len();
-                #[expect(
-                    clippy::indexing_slicing,
-                    reason = "n = window.len() ≤ HACKRF_TRANSFER_BUFFER_SIZE = chunk.len()"
-                )]
-                {
-                    chunk[..n].copy_from_slice(window);
-                    if n < HACKRF_TRANSFER_BUFFER_SIZE {
-                        chunk[n..].fill(0);
-                    }
-                }
-
-                if let Err(e) = endpoint
-                    .transfer_blocking(chunk.clone().into(), Duration::from_secs(5))
-                    .into_result()
-                {
-                    #[expect(clippy::unwrap_used, reason = "mutex poison means simulation thread panicked; unrecoverable")]
-                    {
-                        *hackrf_err_t.lock().unwrap() = Some(e.to_string());
-                    }
-                    return;
-                }
-
-                #[expect(clippy::unwrap_used, reason = "mutex poison means simulation thread panicked; unrecoverable")]
-                {
-                    state_t.lock().unwrap().bytes_sent += n as u64;
-                }
-            }
-        }
-
-        sdr.stop_tx().ok();
-    });
-
-    // 5. Looping simulation: re-initialise the generator on every pass.
-    let mut loop_error: Option<Box<dyn std::error::Error + Send + Sync>> = None;
-
-    loop {
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
-
-        generator.initialize()?;
-
-        #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; unrecoverable")]
-        {
-            let mut s = state.lock().unwrap();
-            s.total_steps = generator.simulation_step_count;
-            s.current_step = 0;
-            s.loop_count += 1;
-        }
-
-        let tx_pass = tx.clone();
-        let state_pass = Arc::clone(state);
-        let stop_pass = Arc::clone(stop);
-        let mut step: usize = 0;
-
-        let sim_result = generator.run_simulation_with_callback(move |block| {
-            if stop_pass.load(Ordering::Relaxed) {
-                return Err(gps::Error::msg("stopped"));
-            }
-
-            tx_pass
-                .send(block.to_vec())
-                .map_err(|_err| gps::Error::msg("HackRF channel closed"))?;
-
-            step += 1;
-            #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; unrecoverable")]
-            {
-                state_pass.lock().unwrap().current_step = step;
-            }
-            Ok(())
-        });
-
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
-        if let Err(e) = sim_result {
-            loop_error = Some(e.into());
-            break;
-        }
-    }
-
-    // Signal the HackRF thread to exit and wait for it to flush.
-    drop(tx);
-    hackrf_thread.join().ok();
-
-    // Surface any error the HackRF thread recorded.
-    #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; unrecoverable")]
-    let hackrf_error = hackrf_err.lock().unwrap().take();
-    if let Some(err) = hackrf_error {
-        #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; unrecoverable")]
-        {
-            state.lock().unwrap().error = Some(format!("HackRF error: {err}"));
-        }
-        return Err(err.into());
-    }
-
-    // When the stop flag caused the loop to exit, return Err so the wrapper
-    // can set SimStatus::Stopped (rather than Done).
-    if stop.load(Ordering::Relaxed) {
-        return Err("stopped by user".into());
-    }
-
-    if let Some(e) = loop_error {
-        return Err(e);
-    }
-
-    Ok(())
+    lat:        f64,
+    lon:        f64,
+    alt:        f64,
+    settings:   &SimSettings,
+    state:      &Arc<Mutex<SimState>>,
+    stop:       &Arc<AtomicBool>,
+    istate:     Arc<std::sync::Mutex<crate::gps_sim::InteractiveState>>,
+) {
+    run_interactive_native(rinex_path, lat, lon, alt, settings, state, stop, istate);
 }
 
 /// Entry point called from the UI after spawning a dedicated thread.
 ///
-/// Updates `state` on completion or error; sets `status` to `Done`, `Stopped`,
-/// or `Error` as appropriate.
+/// Runs the GPS L1 C/A signal generation for a single motion-file pass.
 pub fn run(
-    rinex_path: &Path,
+    rinex_path:  &Path,
     motion_path: &Path,
-    settings: &SimSettings,
-    state: &Arc<Mutex<SimState>>,
-    stop: &Arc<AtomicBool>,
+    settings:    &SimSettings,
+    state:       &Arc<Mutex<SimState>>,
+    stop:        &Arc<AtomicBool>,
+    pause:       &Arc<AtomicBool>,
 ) {
-    match do_run(rinex_path, motion_path, settings, state, stop) {
-        Ok(()) => {
-            #[expect(clippy::unwrap_used, reason = "mutex poison means the UI thread panicked; further recovery is not meaningful")]
-            let mut s = state.lock().unwrap();
-            if s.status == SimStatus::Running {
-                s.status = SimStatus::Done;
-            }
-        }
-        Err(e) => {
-            #[expect(clippy::unwrap_used, reason = "mutex poison means the UI thread panicked; further recovery is not meaningful")]
-            let mut s = state.lock().unwrap();
-            if stop.load(Ordering::Relaxed) {
-                s.status = SimStatus::Stopped;
-            } else if s.status == SimStatus::Running {
-                s.status = SimStatus::Error;
-                if s.error.is_none() {
-                    s.error = Some(e.to_string());
-                }
-            }
-        }
+    run_native(rinex_path, motion_path, settings, state, stop, pause);
+}
+
+// ── Native implementations ────────────────────────────────────────────────────
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the public function signature"
+)]
+fn run_interactive_native(
+    rinex_path: &Path,
+    lat:        f64,
+    lon:        f64,
+    alt:        f64,
+    settings:   &SimSettings,
+    state:      &Arc<Mutex<SimState>>,
+    stop:       &Arc<AtomicBool>,
+    istate:     Arc<std::sync::Mutex<crate::gps_sim::InteractiveState>>,
+) {
+    use crate::gps_sim::{Location, Simulator};
+
+    let rinex_str = rinex_path.to_string_lossy().into_owned();
+    let output    = build_output(settings);
+    let state2    = Arc::clone(state);
+    let state3    = Arc::clone(state);
+    let stop2     = Arc::clone(stop);
+
+    let mut builder = Simulator::builder()
+        .rinex(rinex_str)
+        .location(Location::degrees(lat, lon, alt))
+        // Large duration — the user stops interactively via the Stop button.
+        .duration_secs(86_400)
+        .start_time(parse_start_time(&settings.start_time))
+        .output(output)
+        .with_stop(Arc::clone(stop))
+        .with_interactive_state(istate)
+        .on_event(move |e| handle_event(&e, &state2, &stop2))
+        .ppb(settings.ppb)
+        .elevation_mask_deg(settings.elevation_mask_deg)
+        .block_prns(settings.blocked_prns.clone())
+        .ionospheric_disable(settings.ionospheric_disable)
+        .time_override(settings.time_override)
+        .fixed_gain(settings.fixed_gain)
+        .leap_override(settings.leap)
+        .hackrf_sample_rate(settings.frequency as f64)
+        .hackrf_center_freq(settings.center_frequency);
+
+    if let Some(bw) = settings.baseband_filter {
+        builder = builder.hackrf_baseband_filter(bw);
+    }
+    if let Some(path) = &settings.log_path {
+        builder = builder.log_path(path.clone());
+    }
+
+    let result = builder.build().and_then(|sim| sim.run());
+
+    let (final_status, error_msg) = finish_status(result, stop);
+    #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; no recovery")]
+    {
+        let mut s = state3.lock().unwrap();
+        s.status = final_status;
+        s.error  = error_msg;
+    }
+
+    // Ensure the stop flag is set so the UI knows we finished.
+    if !stop.load(Ordering::Relaxed) {
+        stop.store(true, Ordering::Relaxed);
     }
 }
 
 #[expect(
-    clippy::too_many_lines,
-    reason = "linear pipeline: builder setup, HackRF config, FIFO channel, producer loop, teardown"
+    clippy::too_many_arguments,
+    reason = "mirrors the public function signature"
 )]
-fn do_run(
-    rinex_path: &Path,
-    motion_path: &Path,
-    settings: &SimSettings,
-    state: &Arc<Mutex<SimState>>,
-    stop: &Arc<AtomicBool>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // 1. Build and initialise the signal generator.
-    //
-    // Convert the user-supplied start time from "YYYY/MM/DD,hh:mm:ss" (the
-    // anywhere-sdr CLI format) to RFC 3339 "YYYY-MM-DDThh:mm:ssZ" which jiff
-    // can parse.  "now" and None are passed through unchanged.
-    let start_time = settings.start_time.as_deref().map(|s| {
-        if s.eq_ignore_ascii_case("now") {
-            "now".to_owned()
+fn run_static_loop_native(
+    rinex_path:    &Path,
+    lat:           f64,
+    lon:           f64,
+    alt:           f64,
+    loop_duration: f64,
+    settings:      &SimSettings,
+    state:         &Arc<Mutex<SimState>>,
+    stop:          &Arc<AtomicBool>,
+) {
+    use crate::gps_sim::{Location, Simulator};
+
+    let rinex_str = rinex_path.to_string_lossy().into_owned();
+    let output    = build_output(settings);
+    let duration  = loop_duration.max(1.0) as u32;
+
+    let mut loop_count = 0usize;
+
+    while !stop.load(Ordering::Relaxed) {
+        let state2 = Arc::clone(state);
+        let state3 = Arc::clone(state);
+        let stop2  = Arc::clone(stop);
+
+        let builder = Simulator::builder()
+            .rinex(rinex_str.clone())
+            .location(Location::degrees(lat, lon, alt))
+            .duration_secs(duration)
+            .start_time(parse_start_time(&settings.start_time))
+            .output(output.clone())
+            .with_stop(Arc::clone(stop))
+            .on_event(move |e| handle_event(&e, &state2, &stop2))
+            .ppb(settings.ppb)
+            .elevation_mask_deg(settings.elevation_mask_deg)
+            .block_prns(settings.blocked_prns.clone())
+            .ionospheric_disable(settings.ionospheric_disable)
+            .time_override(settings.time_override)
+            .fixed_gain(settings.fixed_gain)
+            .leap_override(settings.leap)
+            .hackrf_sample_rate(settings.frequency as f64)
+            .hackrf_center_freq(settings.center_frequency);
+        let builder = if let Some(bw) = settings.baseband_filter {
+            builder.hackrf_baseband_filter(bw)
         } else {
-            // Convert "YYYY/MM/DD,hh:mm:ss" → "YYYY-MM-DDThh:mm:ssZ" (RFC 3339).
-            let mut iso = s.replace('/', "-").replace(',', "T");
-            iso.push('Z');
-            iso
-        }
-    });
-
-    let leap = settings
-        .leap
-        .map(|(week, day, delta)| vec![week, day, delta]);
-
-    let mut generator = SignalGeneratorBuilder::default()
-        .navigation_file(Some(rinex_path.to_path_buf()))?
-        .user_motion_file(Some(motion_path.to_path_buf()))?
-        .data_format(Some(8))? // 8-bit signed I/Q — HackRF native format
-        .frequency(Some(settings.frequency))?
-        .time(start_time)?
-        .time_override(Some(settings.time_override))
-        .ionospheric_disable(Some(settings.ionospheric_disable))
-        .path_loss(settings.fixed_gain)
-        .leap(leap)
-        .verbose(Some(false))
-        .build()?;
-
-    generator.initialize()?;
-
-    // Expose total step count to the UI.
-    #[expect(clippy::unwrap_used, reason = "mutex poison means the UI thread panicked; further recovery is not meaningful")]
-    {
-        state.lock().unwrap().total_steps = generator.simulation_step_count;
-    }
-
-    // 2. Open and configure HackRF.
-    let mut sdr = HackRF::new_auto()?;
-    sdr.set_freq(settings.center_frequency)?;
-    sdr.set_sample_rate_auto(settings.frequency as f64)?;
-    // If a manual baseband filter bandwidth was specified, override the value
-    // that set_sample_rate_auto chose automatically.
-    if let Some(bw) = settings.baseband_filter {
-        sdr.set_baseband_filter_bandwidth(bw)?;
-    }
-    sdr.set_txvga_gain(settings.txvga_gain)?;
-    sdr.set_amp_enable(settings.amp_enable)?;
-    sdr.enter_tx_mode()?;
-
-    // 3. FIFO channel: generator (producer) → HackRF thread (consumer).
-    //    Capacity of 8 blocks ≈ 8 × 520 KB ≈ 4 MB of lookahead.
-    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(8);
-    let tx_cb = tx.clone();
-
-    let hackrf_err: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let hackrf_err_t = Arc::clone(&hackrf_err);
-    let state_t = Arc::clone(state);
-
-    // 4. HackRF consumer thread.
-    let hackrf_thread = thread::spawn(move || {
-        let mut endpoint = match sdr.tx_queue() {
-            Ok(ep) => ep,
-            Err(e) => {
-                #[expect(clippy::unwrap_used, reason = "mutex poison means simulation thread panicked; unrecoverable")]
-                {
-                    *hackrf_err_t.lock().unwrap() = Some(e.to_string());
-                }
-                return;
-            }
+            builder
         };
+        let builder = if let Some(path) = &settings.log_path {
+            builder.log_path(path.clone())
+        } else {
+            builder
+        };
+        let result = builder.build().and_then(|sim| sim.run());
 
-        // Each 100 ms block must be split into HACKRF_TRANSFER_BUFFER_SIZE
-        // (256 KB) chunks for the USB DMA engine.
-        let mut chunk = vec![0u8; HACKRF_TRANSFER_BUFFER_SIZE];
-
-        while let Ok(block) = rx.recv() {
-            for window in block.chunks(HACKRF_TRANSFER_BUFFER_SIZE) {
-                let n = window.len();
-                #[expect(
-                    clippy::indexing_slicing,
-                    reason = "n = window.len() ≤ HACKRF_TRANSFER_BUFFER_SIZE = chunk.len()"
-                )]
-                {
-                    chunk[..n].copy_from_slice(window);
-                    if n < HACKRF_TRANSFER_BUFFER_SIZE {
-                        chunk[n..].fill(0);
-                    }
-                }
-
-                if let Err(e) = endpoint
-                    .transfer_blocking(chunk.clone().into(), Duration::from_secs(5))
-                    .into_result()
-                {
-                    #[expect(clippy::unwrap_used, reason = "mutex poison means simulation thread panicked; unrecoverable")]
-                    {
-                        *hackrf_err_t.lock().unwrap() = Some(e.to_string());
-                    }
-                    return;
-                }
-
-                #[expect(clippy::unwrap_used, reason = "mutex poison means simulation thread panicked; unrecoverable")]
-                {
-                    state_t.lock().unwrap().bytes_sent += n as u64;
-                }
-            }
-        }
-
-        // Channel closed — flush and stop TX.
-        sdr.stop_tx().ok();
-    });
-
-    // 5. GPS simulation loop with streaming callback.
-    let mut step: usize = 0;
-    let state_cb = Arc::clone(state);
-    let stop_cb = Arc::clone(stop);
-
-    let sim_result = generator.run_simulation_with_callback(move |block| {
-        if stop_cb.load(Ordering::Relaxed) {
-            return Err(gps::Error::msg("stopped"));
-        }
-
-        tx_cb
-            .send(block.to_vec())
-            .map_err(|_err| gps::Error::msg("HackRF channel closed"))?;
-
-        step += 1;
-        #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; unrecoverable")]
+        // Increment loop count and update state.
+        loop_count += 1;
+        let (final_status, error_msg) = finish_status(result, stop);
+        #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; no recovery")]
         {
-            state_cb.lock().unwrap().current_step = step;
+            let mut s = state3.lock().unwrap();
+            s.loop_count = loop_count;
+            s.status     = final_status.clone();
+            s.error      = error_msg;
         }
-        Ok(())
-    });
 
-    // Drop sender so the HackRF thread's rx.recv() returns Err and it exits.
-    drop(tx);
-
-    // Wait for the HackRF thread to finish flushing.
-    hackrf_thread.join().ok();
-
-    // Surface any error the HackRF thread recorded.
-    #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; unrecoverable")]
-    let hackrf_error = hackrf_err.lock().unwrap().take();
-    if let Some(err) = hackrf_error {
-        #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; unrecoverable")]
-        {
-            state.lock().unwrap().error = Some(format!("HackRF error: {err}"));
+        if final_status != SimStatus::Done {
+            break; // Stop, Aborted, or Error — exit the loop.
         }
-        return Err(err.into());
     }
 
-    // Propagate any simulation error (e.g. "stopped" or file I/O issues).
-    sim_result?;
-
-    Ok(())
+    // Ensure the stop flag is set so the UI knows we finished.
+    if !stop.load(Ordering::Relaxed) {
+        stop.store(true, Ordering::Relaxed);
+    }
 }
+
+fn run_native(
+    rinex_path:  &Path,
+    motion_path: &Path,
+    settings:    &SimSettings,
+    state:       &Arc<Mutex<SimState>>,
+    stop:        &Arc<AtomicBool>,
+    pause:       &Arc<AtomicBool>,
+) {
+    use crate::gps_sim::Simulator;
+
+    let rinex_str  = rinex_path.to_string_lossy().into_owned();
+    let motion_str = motion_path.to_string_lossy().into_owned();
+    let output     = build_output(settings);
+
+    let state2 = Arc::clone(state);
+    let state3 = Arc::clone(state);
+    let stop2  = Arc::clone(stop);
+
+    let builder = Simulator::builder()
+        .rinex(rinex_str)
+        .motion_file(motion_str)
+        .start_time(parse_start_time(&settings.start_time))
+        .output(output)
+        .with_stop(Arc::clone(stop))
+        .with_pause(Arc::clone(pause))
+        .on_event(move |e| handle_event(&e, &state2, &stop2))
+        .ppb(settings.ppb)
+        .elevation_mask_deg(settings.elevation_mask_deg)
+        .block_prns(settings.blocked_prns.clone())
+        .ionospheric_disable(settings.ionospheric_disable)
+        .time_override(settings.time_override)
+        .fixed_gain(settings.fixed_gain)
+        .leap_override(settings.leap)
+        .hackrf_sample_rate(settings.frequency as f64)
+        .hackrf_center_freq(settings.center_frequency);
+    let builder = if let Some(bw) = settings.baseband_filter {
+        builder.hackrf_baseband_filter(bw)
+    } else {
+        builder
+    };
+    let builder = if let Some(path) = &settings.log_path {
+        builder.log_path(path.clone())
+    } else {
+        builder
+    };
+    let result = builder.build().and_then(|sim| sim.run());
+
+    let (final_status, error_msg) = finish_status(result, stop);
+    #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; no recovery")]
+    {
+        let mut s = state3.lock().unwrap();
+        s.status = final_status;
+        s.error  = error_msg;
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn build_output(settings: &SimSettings) -> crate::gps_sim::SdrOutput {
+    use crate::gps_sim::SdrOutput;
+    use super::state::SimOutputType;
+    match &settings.output_type {
+        SimOutputType::HackRf => SdrOutput::HackRf {
+            gain_db: i32::from(settings.txvga_gain),
+            amp:     settings.amp_enable,
+        },
+        SimOutputType::IqFile => SdrOutput::IqFile {
+            path: settings.iq_file_path.clone(),
+        },
+        SimOutputType::Udp => SdrOutput::UdpStream {
+            addr: settings.udp_addr.clone(),
+        },
+        SimOutputType::Tcp => SdrOutput::TcpServer {
+            port: settings.tcp_port,
+        },
+        SimOutputType::Null => SdrOutput::Null,
+    }
+}
+
+/// Update `SimState` from a `SimEvent` received by the `on_event` callback.
+fn handle_event(
+    event: &crate::gps_sim::SimEvent,
+    state: &Arc<Mutex<SimState>>,
+    stop:  &Arc<AtomicBool>,
+) {
+    use crate::gps_sim::SimEvent;
+
+    if stop.load(Ordering::Relaxed) {
+        return;
+    }
+
+    #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; no recovery")]
+    let mut s = state.lock().unwrap();
+
+    match event {
+        SimEvent::Progress { current_step, total_steps, bytes_sent } => {
+            s.current_step = *current_step;
+            s.total_steps  = *total_steps;
+            s.bytes_sent   = *bytes_sent;
+        }
+        SimEvent::Done => {
+            s.status = SimStatus::Done;
+        }
+        SimEvent::Position { lat_deg, lon_deg, height_m } => {
+            s.lat_deg  = *lat_deg;
+            s.lon_deg  = *lon_deg;
+            s.height_m = *height_m;
+            s.satellites.clear();
+        }
+        SimEvent::Satellite { prn, az_deg, el_deg, .. } => {
+            s.satellites.push(crate::simulator::state::SimSatInfo {
+                prn:    *prn,
+                az_deg: *az_deg,
+                el_deg: *el_deg,
+            });
+        }
+        _ => {}
+    }
+}
+
+/// Determine the final `SimStatus` and optional error message from the result and stop flag.
+fn finish_status(
+    result: Result<(), crate::gps_sim::SimError>,
+    stop:   &Arc<AtomicBool>,
+) -> (SimStatus, Option<String>) {
+    match result {
+        Ok(()) if stop.load(Ordering::Relaxed) => (SimStatus::Stopped, None),
+        Ok(())                                  => (SimStatus::Done, None),
+        Err(crate::gps_sim::SimError::Aborted)  => (SimStatus::Stopped, None),
+        Err(e)                                   => (SimStatus::Error, Some(e.to_string())),
+    }
+}
+
+/// Parse a start-time string from the UI into a [`crate::gps_sim::StartTime`] value.
+///
+/// Accepts `""` / `"now"` (→ `Now`) or `"YYYY/MM/DD,hh:mm:ss"` (→ `DateTime`).
+/// Falls back to `Now` if the string cannot be parsed.
+fn parse_start_time(s: &Option<String>) -> crate::gps_sim::StartTime {
+    use crate::gps_sim::{StartTime, UtcDate};
+
+    let s = match s.as_deref() {
+        None | Some("") => return StartTime::Now,
+        Some(s) => s.trim(),
+    };
+    if s.eq_ignore_ascii_case("now") {
+        return StartTime::Now;
+    }
+    // Expected format: "YYYY/MM/DD,hh:mm:ss"
+    let Some((date_part, time_part)) = s.split_once(',') else { return StartTime::Now; };
+    let mut d = date_part.splitn(3, '/');
+    let (Some(year), Some(month), Some(day)) = (
+        d.next().and_then(|v| v.parse::<i32>().ok()),
+        d.next().and_then(|v| v.parse::<u8>().ok()),
+        d.next().and_then(|v| v.parse::<u8>().ok()),
+    ) else { return StartTime::Now; };
+    let mut t = time_part.splitn(3, ':');
+    let (Some(hour), Some(min), Some(sec)) = (
+        t.next().and_then(|v| v.parse::<u8>().ok()),
+        t.next().and_then(|v| v.parse::<u8>().ok()),
+        t.next().and_then(|v| v.parse::<f64>().ok()),
+    ) else { return StartTime::Now; };
+    StartTime::DateTime(UtcDate { year, month, day, hour, min, sec })
+}
+

@@ -33,15 +33,21 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 walkers = "0.52"
 env_logger = "0.11.8"
-gps = { git = "https://github.com/okiedocus/anywhere-sdr.git" }
-#gps = { path = "../crates/gps" }
-libhackrf = { git = "https://github.com/okiedocus/anywhere-sdr.git" }
-#libhackrf = { path = "../crates/libhackrf" }
 rfd = "0.15"
 suppaftp = { version = "6", default-features = false, features = ["native-tls"] }
 flate2 = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 roxmltree = "0.20"
+
+# GPS simulator engine dependencies — inlined as src/gps_sim/.
+thiserror        = "2"
+nusb             = "0.2"
+futures-lite     = "2"
+crossbeam-channel = "0.5"
+crossterm        = "0.28"
+
+[dev-dependencies]
+approx = "0.5"
 
 [profile.release]
 opt-level = 3

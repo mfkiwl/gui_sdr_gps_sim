@@ -1,154 +1,414 @@
-# Gui SDR GPS Simulator
+This project is a work in progress. Please test it and give your feedback!
 
-A cross-platform desktop application for generating and transmitting **GPS L1 C/A signals** via a [HackRF One](https://greatscottgadgets.com/hackrf/) software-defined radio, and for creating the UMF user-motion files those simulations require.
+# GUI SDR GPS Simulator
 
-Built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui) in Rust. Runs natively on Windows, Linux, and macOS, and compiles to WebAssembly for use in a browser.
+A cross-platform desktop application that generates real **GPS L1 C/A baseband signals** and transmits them through a software-defined radio. It also provides tools to create and manage the route files (UMF motion files) that drive those simulations.
+
+Built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui) in Rust. Runs natively on **Windows, Linux, and macOS**.
+
+> **Legal note:** Transmitting GPS signals without authorisation is regulated or prohibited in most jurisdictions. Use this software only in a shielded enclosure or with the appropriate licences. The authors accept no liability for misuse.
 
 ---
 
-## Features
+## Table of contents
 
-| Feature | Description |
+1. [What this application does](#what-this-application-does)
+2. [Hardware requirements](#hardware-requirements)
+3. [Software requirements](#software-requirements)
+4. [Getting started](#getting-started)
+5. [Page 1 — GPS Simulator](#page-1--gps-simulator)
+   - [Dynamic mode](#dynamic-mode-follow-a-route)
+   - [Static mode](#static-mode-fixed-position)
+   - [Interactive mode](#interactive-mode-keyboard-steered)
+   - [Simulator settings](#simulator-settings)
+   - [SDR output options](#sdr-output-options)
+6. [Page 2 — Create UMF Route](#page-2--create-umf-route)
+   - [ORS API](#route-source-1-openrouteservice-api)
+   - [GeoJSON file](#route-source-2-geojson-file)
+   - [Draw on map](#route-source-3-draw-on-map)
+   - [GPX / KML import](#route-source-4-gpx--kml-import)
+7. [Page 3 — Manage Waypoints](#page-3--manage-waypoints)
+8. [Page 4 — Manage UMF Routes](#page-4--manage-umf-routes)
+9. [GNU Radio flow graphs](#gnu-radio-flow-graphs)
+10. [File layout](#file-layout)
+11. [Building](#building)
+12. [Dependencies](#dependencies)
+
+---
+
+## What this application does
+
+The app has two main jobs:
+
+1. **Simulate GPS** — generate a mathematically accurate GPS L1 C/A baseband IQ signal for a moving or stationary receiver and deliver it to an SDR transmitter (or to a file / network stream).
+2. **Create routes** — produce the UMF user-motion CSV files that describe a receiver's trajectory through space. Routes can come from an online directions API, a drawn polyline, imported GPX/KML tracks, or a GeoJSON file.
+
+The generated signal contains a full satellite constellation (up to 12 SVs), orbital mechanics, ionospheric / tropospheric delay models, and Doppler shifts — everything a real GPS receiver expects to see.
+
+---
+
+## Hardware requirements
+
+| Item | Role |
 |---|---|
-| **GPS Simulator** | Transmit a GPS L1 C/A signal from a static position or follow a pre-recorded UMF motion file through space |
-| **Dynamic Mode** | Feed a UMF route CSV to the simulator; watch the current position move along the route on a live map |
-| **Static Mode** | Hold a fixed geographic coordinate; optionally loop the signal for a configurable duration |
-| **Create UMF Route** | Generate a UMF user-motion CSV from four different sources (see below) |
-| **Manage Waypoints** | Store, filter, and organise named geographic coordinates for reuse as route endpoints |
-| **Manage UMF Routes** | Browse, preview, edit, and delete the route library; open any route in the interactive editor |
+| **[HackRF One](https://greatscottgadgets.com/hackrf/)** | SDR transmitter — sends the GPS IQ signal over RF |
+| (optional) Second HackRF or SDR receiver | Verify the transmitted signal with the GNU Radio analyzer |
 
-### Route sources
-
-- **OpenRouteService API** — fetch a real walking/cycling/driving route between waypoints
-- **GeoJSON file** — import any LineString GeoJSON from disk
-- **Draw on map** — click to place vertices interactively; drag to reposition; click near a segment to insert a point
-- **GPX / KML import** — load a track from a GPS device or mapping tool
+The HackRF driver must be installed and accessible without root/administrator privileges.
+- **Windows:** replace the HackRF USB driver with WinUSB via [Zadig](https://zadig.akeo.ie/).
+- **Linux:** add a udev rule so the device is accessible without `sudo`.
 
 ---
 
-## Requirements
+## Software requirements
 
-### Hardware
-
-- **[HackRF One](https://greatscottgadgets.com/hackrf/)** — required for actual RF transmission
-- The HackRF drivers must be installed and the device must be accessible without root / administrator privileges
-
-### Software
-
-- **Rust toolchain 1.88** — pinned via `rust-toolchain` (installed automatically by `rustup`)
-- For route generation via API: a free [OpenRouteService API key](https://openrouteservice.org/dev/#/signup)
-- For WASM builds: [Trunk](https://trunkrs.dev/) (`cargo install trunk`)
-
-> **Legal note:** Transmitting GPS signals without authorisation is regulated or prohibited in most jurisdictions. Only use this software in a shielded environment or with the appropriate licences. The authors accept no liability for misuse.
+| Requirement | Notes |
+|---|---|
+| **Rust 1.88** | Pinned via `rust-toolchain`; installed automatically by `rustup` |
+| **OpenRouteService API key** | Free at [openrouteservice.org](https://openrouteservice.org/dev/#/signup) — only needed for the ORS route source |
 
 ---
 
 ## Getting started
 
 ```bash
-# Clone the repository
+# 1. Clone the repository
 git clone https://github.com/okiedocus/gui_sdr_gps_sim
 cd gui_sdr_gps_sim
 
-# Build and run (Rust 1.88 is selected automatically via rust-toolchain)
+# 2. Build and run (Rust 1.88 is picked up automatically from rust-toolchain)
 cargo run
 ```
 
-The window opens at **1100 × 750 px**. All pages scroll vertically if the content is taller than the window.
+The window opens at **1100 × 750 px** and is resizable (minimum 700 × 500 px). Every page scrolls vertically when content exceeds the window height.
+
+On first run:
+- Set your OpenRouteService API key via **File → Set ORS API Key** (only needed for the ORS route source).
+- Download a RINEX navigation file on the Simulator page before starting a simulation.
 
 ---
 
-## Usage guide
+## Page 1 — GPS Simulator
 
-### 1 — GPS Simulator
+Navigate to the **GPS Simulator** page using the left sidebar.
 
-Navigate to **GPS Simulator** in the left sidebar.
+The page has four tabs: **Dynamic**, **Static**, **Interactive**, and **Settings**.
 
-#### Dynamic Mode (motion file)
+---
 
-1. **RINEX nav file** — click *Browse* to select a `.nav` / `.n` broadcast ephemeris file, or click *Download Today's RINEX* to fetch the current-day file automatically from [CDDIS](https://cddis.nasa.gov/) (requires internet access). Files are stored in `./Rinex_files/`.
-2. **Route Library** — select a row from the table to auto-fill the UMF motion CSV path and preview the route on the map.
-3. **Motion CSV** — alternatively, click *Browse* to pick any UMF `.csv` file manually.
-4. Click **Start** to begin transmission. A live map shows the current position as the signal progresses along the route. Click **Stop** to halt.
+### Dynamic mode (follow a route)
 
-#### Static Mode (fixed position)
+The receiver moves along a pre-recorded UMF motion file at the speed defined when the route was created.
 
-1. Select the RINEX nav file (same as above).
-2. Enter the target **Latitude**, **Longitude**, and **Altitude (m)**.
-3. Optionally enable *Loop* and set a duration.
+**Steps:**
+
+1. **RINEX navigation file** — click *Browse* to pick a broadcast ephemeris file (`.nav` / `.n` / `.rnx`), or click *Download Today's RINEX* to fetch the current-day file automatically from [CDDIS / NASA](https://cddis.nasa.gov/). Files are stored in `./Rinex_files/`.
+
+2. **Route** — either:
+   - Click a row in the **Route Library** table to auto-fill the motion CSV path and show the route on the map, or
+   - Click *Browse* next to *Motion CSV* to pick any UMF `.csv` file manually.
+
+3. Click **Start**. A **live map** shows the current position moving along the route as the simulation progresses. A progress bar and bytes-sent counter update in real time.
+
+4. Click **Stop** to cancel at any time.
+
+**What you see while running:**
+- Live position marker on the map, updated every frame.
+- Progress bar showing how far through the route the simulation is.
+- Cumulative bytes transferred to the output sink.
+- Satellite sky plot (azimuth / elevation of all visible SVs, updated once per second).
+
+---
+
+### Static mode (fixed position)
+
+The receiver holds a constant geographic coordinate. Useful for testing that a GPS device can get a fix at a known location.
+
+**Steps:**
+
+1. Select the RINEX navigation file (same as Dynamic mode).
+2. Enter **Latitude** and **Longitude** in decimal degrees, and **Altitude** in metres above the WGS-84 ellipsoid.
+3. Optionally enable **Loop** and set a loop duration — the simulation restarts automatically at the end of each pass, incrementing a loop counter.
 4. Click **Start Loop**.
 
-#### Settings (shared by both modes)
+---
+
+### Interactive mode (keyboard-steered)
+
+Move the simulated receiver position in real time using arrow keys or WASD while the simulation is running. Useful for interactive demonstrations.
+
+**Steps:**
+
+1. Select the RINEX navigation file.
+2. Set the starting **Latitude**, **Longitude**, and **Altitude**.
+3. Set the **Step size** (metres per key press) and **Heading** (degrees).
+4. Click **Start**. Use the on-screen controls or keyboard to steer the position.
+
+---
+
+### Simulator settings
+
+The **Settings** tab applies to all three simulation modes. Changes take effect the next time a simulation is started.
 
 | Setting | Description |
 |---|---|
-| Start time | `now`, a specific `YYYY/MM/DD,hh:mm:ss` UTC timestamp, or empty to use the first RINEX epoch |
-| Overwrite TOC/TOE | Force all ephemeris clock/orbit epochs to match the start time (equivalent to `-T` in anywhere-sdr) |
-| Disable ionospheric model | Useful for spacecraft scenarios above the ionosphere |
-| Fixed gain | Hold all satellite signals at a constant level instead of computing path loss |
-| TX VGA Gain | HackRF baseband TX gain, 0–47 dB |
-| Sample rate | Baseband sampling frequency (≥ 1 000 000 Hz) |
-| Centre frequency | Carrier frequency in Hz; default is GPS L1 C/A = 1 575 420 000 Hz |
-| RF amplifier | Enables the HackRF RF pre-amplifier — use with caution |
-| Baseband filter | Override automatic filter bandwidth |
-| Leap seconds | Manual leap-second override (`-l` flag) |
+| **Output type** | Where IQ samples are sent — see [SDR output options](#sdr-output-options) below |
+| **TX VGA Gain (dB)** | HackRF baseband transmit gain, 0–47 dB. Start at 20 dB. |
+| **RF Amplifier** | Enables the HackRF's built-in +14 dB RF pre-amp. Use only when needed (cable losses, long runs). |
+| **Sample rate (Hz)** | Baseband sampling frequency — must be ≥ 1 000 000. Default 3 000 000 (3 MSPS). |
+| **Centre frequency (Hz)** | Carrier frequency transmitted by the HackRF. Default is GPS L1 C/A = **1 575 420 000 Hz**. |
+| **Baseband filter (Hz)** | Override automatic filter bandwidth. Leave blank for automatic selection. |
+| **Start time** | `now`, a `YYYY/MM/DD,hh:mm:ss` UTC timestamp, or blank to use the first epoch in the RINEX file. |
+| **Overwrite TOC/TOE** | Force all ephemeris clock/orbit epochs to match the start time (removes epoch-validity warnings). |
+| **Disable ionospheric model** | Skip ionospheric delay computation — useful for spacecraft above the ionosphere. |
+| **Fixed gain** | Hold all satellite signal levels at a constant value instead of computing free-space path loss. |
+| **Elevation mask (°)** | Ignore satellites below this elevation angle. 0 = no mask. |
+| **Block PRNs** | Comma-separated list of satellite PRN numbers (1–32) to exclude from the simulation. |
+| **Oscillator offset (ppb)** | Simulate receiver clock frequency offset in parts-per-billion. |
+| **Leap seconds** | Manual override: GPS week, day of week (1–7), and delta leap seconds. |
+| **Position log** | Write a CSV log of the simulated receiver position to the specified file path. |
 
 ---
 
-### 2 — Create UMF Route
+### SDR output options
 
-Navigate to **Create UMF Route**. Give the route a **name** and set a **velocity (km/h)**, then choose a source:
+Select the output sink in the **Settings** tab.
 
-#### ORS API route
-1. Enter your OpenRouteService API key (saved via *File → Set ORS API Key*).
-2. Choose a profile (foot, cycling, car, etc.).
-3. Enter **Start** and **End** coordinates (`lat, lon`). Optionally add one or more **Via** points.
-4. The selected points are shown as coloured markers on the map (green = start, orange = via, red = end).
-5. Click **Generate User Motion File**.
+| Output | Description |
+|---|---|
+| **HackRF** | Transmit via a connected HackRF One (default). Uses the TX VGA gain and amp settings. |
+| **IQ File** | Write raw signed 8-bit interleaved IQ samples (`[I0, Q0, I1, Q1, …]`) to a binary file. |
+| **UDP stream** | Stream IQ bytes to a UDP destination address (e.g. `127.0.0.1:4567`). Datagrams are 32 768 bytes each. |
+| **TCP server** | Open a TCP server on the specified port. The app waits for a client to connect, then streams IQ bytes continuously. |
+| **Null (discard)** | Generate the signal but discard all output. Useful for benchmarking or testing without hardware. |
 
-#### GeoJSON file
-Click *Browse* and select a `.geojson` / `.json` file containing a `LineString` geometry.
-
-#### Draw on map
-- **Click** on the map to append a new waypoint.
-- **Click near an existing segment** to insert a waypoint along that segment.
-- **Drag** a vertex to move it.
-- Use **Undo** to remove the last point, or **Clear** to start over.
-- Click **Generate User Motion File** when done.
-
-#### GPX / KML import
-Click *Browse* and select a `.gpx` or `.kml` track file.
+> The UDP and TCP outputs are intended to be consumed by the included [GNU Radio flow graphs](#gnu-radio-flow-graphs).
 
 ---
 
-After generation, the route CSV and a companion GeoJSON are saved to `./umf/` and the **Route Library** is updated automatically.
+## Page 2 — Create UMF Route
+
+Navigate to **Create UMF Route** using the left sidebar.
+
+A UMF (User Motion File) is a CSV with one transmit position every 100 ms. The app generates it from a geographic route and a target speed.
+
+**Before generating:**
+1. Enter a **Route name** — this becomes the filename (`{name}.csv` and `{name}.geojson`).
+2. Enter a **Velocity (km/h)** — the speed at which the simulated receiver moves along the route.
+3. Choose one of the four route sources below.
 
 ---
 
-### 3 — Manage Waypoints
+### Route source 1: OpenRouteService API
 
-Navigate to **Manage Waypoints**.
+Fetches a realistic road/path route from the free [OpenRouteService](https://openrouteservice.org/) directions API.
 
-- **Add** named geographic coordinates with a description.
-- **Filter** the list by typing in the search box.
-- **Sort** by any column by clicking the column header (click again to reverse).
-- **Edit** or **Delete** any waypoint with the row buttons.
-- Waypoints can be selected as route start / end / via points on the *Create UMF Route* page.
-- All waypoints are persisted to `./waypoint/`.
+**Steps:**
+1. Enter your ORS API key (or set it once via *File → Set ORS API Key*).
+2. Choose a **profile**: foot-walking, cycling-regular, driving-car, etc.
+3. Enter **Start** coordinates (`lat, lon`). Click the field label to pick from your Waypoints list.
+4. (Optional) Add one or more **Via** points.
+5. Enter **End** coordinates.
+6. The map shows green (start), orange (via), and red (end) markers as you type.
+7. Click **Generate User Motion File**.
+
+The app calls the ORS API, receives a GeoJSON LineString, converts it to transmit points at the configured velocity, and saves the CSV.
 
 ---
 
-### 4 — Manage UMF Routes
+### Route source 2: GeoJSON file
 
-Navigate to **Manage UMF Routes**. The library is scanned automatically each time the page loads.
+Load a pre-existing route from a `.geojson` or `.json` file containing a `LineString` or `MultiLineString` geometry.
 
-- **Select** a row to preview the route geometry on the map.
-- **Edit** — opens an interactive route editor:
-  - Drag any vertex to a new position.
-  - Click near a segment to insert a point there.
-  - Click away from all segments to append a new endpoint.
-  - Click **Done** to return to the library, or **Open in Draw Route** to transfer the edited geometry to *Create UMF Route → Draw Route* (name and velocity are pre-filled).
-- **Delete** — removes the `.csv` and `.geojson` files and rescans the library.
+**Steps:**
+1. Select **GeoJSON File** as the route source.
+2. Click *Browse* and open the file.
+3. The route is shown on the map.
+4. Click **Generate User Motion File**.
+
+---
+
+### Route source 3: Draw on map
+
+Draw a route interactively by clicking on the map.
+
+**Controls:**
+| Action | Result |
+|---|---|
+| Click on the map | Append a new endpoint |
+| Click near an existing line segment | Insert a new vertex at that position |
+| Drag a vertex | Move it to a new position |
+| **Undo** button | Remove the last point |
+| **Clear** button | Remove all points and start over |
+| *Browse* (import) | Load a GPX or KML file as the starting shape, then continue editing |
+
+Click **Generate User Motion File** when the route looks correct.
+
+---
+
+### Route source 4: GPX / KML import
+
+Import a route recorded by a GPS device or exported from a mapping tool.
+
+**Steps:**
+1. Select **Import GPX/KML** as the route source.
+2. Click *Browse* and open a `.gpx` or `.kml` file.
+3. The track is shown on the map.
+4. Click **Generate User Motion File**.
+
+---
+
+### After generating
+
+The route is saved to `./umf/`:
+- `{name}.csv` — the UMF motion file used by the simulator
+- `{name}.geojson` — the route geometry for map display
+
+The **Route Library** on the Simulator page is updated automatically so the new route is immediately available.
+
+---
+
+## Page 3 — Manage Waypoints
+
+Navigate to **Manage Waypoints** using the left sidebar.
+
+Waypoints are named geographic coordinates that can be quickly selected as start, via, or end points when creating routes.
+
+**Features:**
+
+| Action | How |
+|---|---|
+| **Add waypoint** | Fill in name, description, and coordinates (`lat, lon`) in the form and click *Add* |
+| **Pick on map** | Click a location on the map to fill in the coordinates automatically |
+| **Edit** | Click the *Edit* button on any row — the form re-opens with the existing values |
+| **Delete** | Click the *Delete* button on any row |
+| **Filter** | Type in the search box to filter the list by name or description |
+| **Sort** | Click any column header to sort by that column; click again to reverse |
+
+All waypoints are persisted to `./waypoint/` and survive app restarts.
+
+---
+
+## Page 4 — Manage UMF Routes
+
+Navigate to **Manage UMF Routes** using the left sidebar.
+
+Displays all route CSV files found in `./umf/` with their distance, duration, and velocity metadata.
+
+**Features:**
+
+| Action | How |
+|---|---|
+| **Preview** | Click any row to display the route geometry on the map |
+| **Edit route** | Click the *Edit* button — opens a full interactive editor |
+| **Delete** | Click the *Delete* button — removes the `.csv` and `.geojson` files and refreshes the list |
+| **Rescan** | The library is rescanned automatically each time the page loads |
+
+**Interactive route editor:**
+- Drag any vertex to move it.
+- Click near a line segment to insert a new point there.
+- Click away from all segments to append a new endpoint.
+- Click **Done** to save and return to the library.
+- Click **Open in Draw Route** to transfer the geometry to the *Create UMF Route → Draw on map* editor (name and velocity are pre-filled).
+
+---
+
+## GNU Radio flow graphs
+
+The `gnuradio/` folder contains flow graphs for receiving and re-transmitting the IQ stream with GNU Radio.
+
+### `gps_udp_to_hackrf_simple` — minimal UDP → HackRF
+
+The simplest possible bridge: receives the app's UDP IQ stream and retransmits it immediately via a HackRF One. No visualisation.
+
+```
+[gui_sdr_gps_sim app]
+  UDP output → 127.0.0.1:4567
+      │
+[network_udp_source]          receive 32 768-byte datagrams
+      │
+[interleaved_char_to_complex  ×1/128]   i8 → complex float ±1.0
+      │
+[osmosdr_sink  hackrf=0]      TX @ 1575.42 MHz / 3 MSPS
+```
+
+**Usage:**
+```bash
+python gnuradio/gps_udp_to_hackrf_simple.py
+# or open in GNU Radio Companion:
+gnuradio-companion gnuradio/gps_udp_to_hackrf_simple.grc
+```
+
+Set the app output to **UDP** → `127.0.0.1:4567`. Start the GNU Radio script first, then start the simulation.
+
+---
+
+### `gps_network_to_hackrf` — network stream → visualize → HackRF TX
+
+Full-featured flow graph: receives the IQ stream (UDP or TCP), shows live spectrum/waterfall/time/constellation, and simultaneously retransmits via HackRF.
+
+```
+[gui_sdr_gps_sim app]
+  TCP or UDP output
+      │
+[network_tcp_source / network_udp_source]
+      │
+[interleaved_char_to_complex  ×1/128]
+      │
+      ├──► [qtgui_freq_sink_c]        Tab 0 — FFT spectrum
+      ├──► [qtgui_waterfall_sink_c]   Tab 1 — Waterfall
+      ├──► [keep_one_in_n ×100]
+      │        └──► [qtgui_time_sink_c]   Tab 2 — Time domain
+      ├──► [qtgui_const_sink_c]       Tab 3 — Constellation diagram
+      └──► [osmosdr_sink  hackrf=0]   HackRF TX @ 1575.42 MHz / 3 MSPS
+```
+
+**Usage:**
+```bash
+python gnuradio/gps_network_to_hackrf.py
+gnuradio-companion gnuradio/gps_network_to_hackrf.grc
+```
+
+TCP is the recommended mode (no packet loss, no datagram alignment issues). Set the app output to **TCP**, configure a port (e.g. `4568`), start the app simulation first (the app is the TCP server), then start the GNU Radio script.
+
+---
+
+### `gps_l1_analyzer` — HackRF RX spectrum analyzer
+
+Standalone receiver flow graph. Uses a **second HackRF in RX mode** to verify the transmitted signal over the air or through a cable + attenuator.
+
+```bash
+python gnuradio/gps_l1_analyzer.py
+gnuradio-companion gnuradio/gps_l1_analyzer.grc
+```
+
+---
+
+### IQ wire format
+
+| Field | Value |
+|---|---|
+| Encoding | Signed 8-bit integers (`i8`), interleaved `[I0, Q0, I1, Q1, …]` |
+| Sample rate | 3 000 000 sps |
+| Centre frequency | 1 575 420 000 Hz (GPS L1 C/A) |
+| UDP datagram size | 32 768 bytes = 16 384 complex samples |
+| TCP | Continuous byte stream, no framing |
+| GNU Radio conversion | `interleaved_char_to_complex(scale=1/128)` → complex float ±1.0 |
+
+### GNU Radio requirements
+
+```bash
+# Ubuntu / Debian
+sudo apt install gnuradio gr-osmosdr python3-pyqt5
+
+# Arch
+sudo pacman -S gnuradio gr-osmosdr python-pyqt5
+
+# Windows: install GNU Radio via the official installer (includes gr-osmosdr)
+# HackRF driver: replace with WinUSB via Zadig  https://zadig.akeo.ie/
+```
+
+GNU Radio 3.10+ · Python 3 · PyQt5
 
 ---
 
@@ -156,25 +416,49 @@ Navigate to **Manage UMF Routes**. The library is scanned automatically each tim
 
 ```
 gui_sdr_gps_sim/
-├── src/                  Rust source
-│   ├── main.rs           Native entry point (window, fonts)
-│   ├── app.rs            MyApp struct + AppPage enum
-│   ├── ui.rs             All UI rendering
-│   ├── map_plugin.rs     Custom walkers map plugins
-│   ├── simulator/        GPS signal generation + HackRF I/O
-│   ├── route/            ORS API client, segmentizer, pipeline
-│   ├── library.rs        Route library scan + library.json
-│   ├── rinex.rs          CDDIS FTPS downloader
-│   ├── waypoint.rs       Waypoint persistence
-│   ├── geo.rs            Coordinate maths + CSV writer
-│   ├── import.rs         GPX / KML parser
-│   └── paths.rs          Well-known directory helpers
-├── assets/img/           Embedded UI images
-├── umf/                  Generated route CSVs + GeoJSON + library.json
-├── waypoint/             Persisted waypoints
-├── Rinex_files/          Downloaded RINEX navigation files
-├── rust-toolchain        Pins Rust 1.88
-└── check.sh              Local CI script
+├── src/
+│   ├── main.rs              Native entry point (window, fonts, icon)
+│   ├── app.rs               MyApp struct, page/tab enums, application state
+│   ├── ui.rs                All UI rendering (every page and panel)
+│   ├── map_plugin.rs        Custom walkers map plugins (markers, polylines, editor)
+│   ├── simulator/
+│   │   ├── mod.rs           Public simulator API, open_file_dialog()
+│   │   ├── state.rs         SimSettings, SimState, SimStatus, SimOutputType
+│   │   └── worker.rs        Background thread: run() / run_static_loop()
+│   ├── gps_sim/             GPS L1 C/A baseband signal engine (native only)
+│   │   ├── types, coords    WGS-84 types and coordinate conversions
+│   │   ├── orbit            Satellite orbit propagation (Keplerian + perturbations)
+│   │   ├── ionosphere       Klobuchar ionospheric delay model
+│   │   ├── troposphere      Hopfield tropospheric delay model
+│   │   ├── codegen          C/A code generation (Gold codes, PRN 1–37)
+│   │   ├── navmsg           GPS navigation message generation
+│   │   ├── rinex            RINEX 2/3 broadcast ephemeris parser
+│   │   ├── signal           IQ sample accumulation (100 ms blocks)
+│   │   ├── fifo             8 × 262 KB lock-free FIFO between generator and TX
+│   │   ├── hackrf           HackRF USB TX thread (libhackrf bindings)
+│   │   └── sim              Top-level Simulator::builder() / run()
+│   ├── route/
+│   │   ├── ors.rs           Async HTTP client for OpenRouteService API
+│   │   ├── segment.rs       segmentize() — route → 100 ms transmit points
+│   │   ├── pipeline.rs      run_pipeline() / run_pipeline_from_geojson()
+│   │   └── geojson.rs       Serde types for ORS GeoJSON response
+│   ├── library.rs           Route library scan + library.json
+│   ├── rinex.rs             CDDIS anonymous FTPS downloader
+│   ├── waypoint.rs          Waypoint persistence (load / save)
+│   ├── geo.rs               Coordinate maths + CSV writer (WGS-84 LLA → ECEF)
+│   ├── import.rs            GPX / KML parser
+│   └── paths.rs             umf_dir() / waypoint_dir() helpers
+├── gnuradio/
+│   ├── gps_udp_to_hackrf_simple.grc/.py    Minimal UDP → HackRF bridge
+│   ├── gps_network_to_hackrf.grc/.py       Full network → visualize → HackRF
+│   ├── gps_l1_analyzer.grc/.py             HackRF RX spectrum analyzer
+│   └── README.md                           GNU Radio usage guide
+├── assets/img/              Embedded UI images (compiled into the binary)
+├── umf/                     Generated route CSVs, GeoJSON files, library.json
+├── waypoint/                Persisted waypoint files
+├── Rinex_files/             Downloaded RINEX navigation files
+├── rust-toolchain           Pins Rust 1.88
+└── check.sh                 Local CI script (fmt + clippy + test)
 ```
 
 ---
@@ -188,28 +472,17 @@ cargo run
 # Release build
 cargo build --release
 
-# WASM (requires trunk)
-trunk build
-```
-
-### Running CI checks locally
-
-```bash
+# Run all CI checks (format, lint, tests)
 bash check.sh
 ```
 
-This runs `cargo check`, `cargo fmt --check`, `cargo clippy` (zero warnings), and `cargo test`.
+### Individual CI steps
 
----
-
-## Development notes
-
-- **Linting** is strict: `cargo clippy -- -D warnings`. Any warning is a build failure.
-- Use `#[expect(lint, reason = "…")]` instead of `#[allow(lint)]`.
-- Do **not** use `unwrap()` — use `?`, `if let`, or `.unwrap_or_default()`.
-- Use `log::info!` / `log::warn!` instead of `println!` / `eprintln!`.
-- The UI uses an **immediate-mode deferred-action pattern**: page functions return an actions struct that is applied after the egui closure, to avoid borrow conflicts.
-- App state is persisted by eframe (serde). Fields that must not be restored (channels, runtime) are tagged `#[serde(skip)]`.
+```bash
+cargo fmt --all -- --check       # formatting
+cargo clippy --workspace --all-targets --all-features -- -D warnings   # lint (zero warnings)
+cargo test --workspace --all-targets --all-features                     # tests
+```
 
 ---
 
@@ -218,16 +491,14 @@ This runs `cargo check`, `cargo fmt --check`, `cargo clippy` (zero warnings), an
 | Crate | Purpose |
 |---|---|
 | `egui` / `eframe` | Immediate-mode GUI framework |
-| `walkers` | OpenStreetMap tile widget for egui |
-| `gps` | GPS L1 C/A signal generation (private fork of anywhere-sdr) |
-| `libhackrf` | HackRF USB control (private fork of anywhere-sdr) |
+| `walkers` | OpenStreetMap tile map widget for egui |
 | `reqwest` + `tokio` | Async HTTP for OpenRouteService API |
-| `suppaftp` + `flate2` | Anonymous FTPS download + gzip decompress for RINEX files |
-| `serde` / `serde_json` | Serialisation of app state and route library |
-| `roxmltree` | GPX / KML parsing |
+| `suppaftp` + `flate2` | Anonymous FTPS download + gzip decompression for RINEX files |
+| `serde` / `serde_json` | App state serialisation and route library JSON |
+| `roxmltree` | GPX / KML XML parsing |
 | `rfd` | Native file picker dialogs |
 | `chrono` | UTC date for RINEX filename construction |
-| `coord_transforms` | WGS-84 LLA ↔ ECEF conversion |
+| `geo` | Geodesic distance and interpolation along great-circle arcs |
 
 ---
 
