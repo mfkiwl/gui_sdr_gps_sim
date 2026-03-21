@@ -31,18 +31,18 @@
 //! # Feature flags
 //! *(none yet — all features are compiled unconditionally)*
 
-pub mod error;
-pub mod types;
-pub mod coords;
-pub mod orbit;
-pub mod ionosphere;
-pub mod troposphere;
 pub mod codegen;
-pub mod navmsg;
-pub mod rinex;
-pub mod signal;
+pub mod coords;
+pub mod error;
 pub mod fifo;
 pub mod hackrf;
+pub mod ionosphere;
+pub mod navmsg;
+pub mod orbit;
+pub mod rinex;
+pub mod signal;
+pub mod troposphere;
+pub mod types;
 
 // Internal modules — not part of the public API.
 mod channel;
@@ -51,9 +51,11 @@ mod sim;
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
 pub use error::SimError;
-pub use types::{GpsTime, Location, StartTime, UtcDate};
-pub use sim::{Simulator, SimulatorBuilder, SimEvent, SimProgress, SatInfo, SimulatorHandle, InteractiveState};
 pub use rinex::NavData;
+pub use sim::{
+    InteractiveState, SatInfo, SimEvent, SimProgress, Simulator, SimulatorBuilder, SimulatorHandle,
+};
+pub use types::{GpsTime, Location, StartTime, UtcDate};
 
 /// Selects where the simulator sends its IQ samples.
 #[derive(Debug, Clone)]

@@ -16,19 +16,26 @@
 
 use std::io::{BufWriter, Write as _};
 use std::net::{TcpListener, UdpSocket};
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
-use super::{SimError, SdrOutput};
-use super::types::{Location, StartTime, GpsTime,
-                   consts::{STEP_SECS, DT, SAMPLES_PER_STEP, MAX_CHANNELS,
-                            HACKRF_BUF_BYTES, LAMBDA_L1, CODE_FREQ_CA, CARR_TO_CODE}};
-use super::rinex::NavData;
 use super::channel::Channel;
-use super::navmsg::generate_nav_msg;
-use super::signal::{COS_TABLE, SIN_TABLE, ant_pattern_linear};
-use super::fifo::IqFifo;
 use super::coords::llh_to_ecef;
+use super::fifo::IqFifo;
+use super::navmsg::generate_nav_msg;
+use super::rinex::NavData;
+use super::signal::{COS_TABLE, SIN_TABLE, ant_pattern_linear};
+use super::types::{
+    GpsTime, Location, StartTime,
+    consts::{
+        CARR_TO_CODE, CODE_FREQ_CA, DT, HACKRF_BUF_BYTES, LAMBDA_L1, MAX_CHANNELS,
+        SAMPLES_PER_STEP, STEP_SECS,
+    },
+};
+use super::{SdrOutput, SimError};
 
 // ── Status events ─────────────────────────────────────────────────────────────
 
@@ -44,14 +51,27 @@ pub enum SimEvent {
     /// Human-readable status message (e.g., "Loaded N satellites").
     Status(String),
     /// Current simulated receiver position (emitted every second).
-    Position { lat_deg: f64, lon_deg: f64, height_m: f64 },
+    Position {
+        lat_deg: f64,
+        lon_deg: f64,
+        height_m: f64,
+    },
     /// Per-satellite azimuth/elevation status update (once per second).
-    Satellite { prn: u8, az_deg: f64, el_deg: f64, active: bool },
+    Satellite {
+        prn: u8,
+        az_deg: f64,
+        el_deg: f64,
+        active: bool,
+    },
     /// Step counter for progress-bar display (emitted every 100 ms step).
     ///
     /// `bytes_sent` counts every transmitted IQ buffer, including paused iterations
     /// where `current_step` stays fixed.
-    Progress { current_step: usize, total_steps: usize, bytes_sent: u64 },
+    Progress {
+        current_step: usize,
+        total_steps: usize,
+        bytes_sent: u64,
+    },
     /// Simulation has finished normally.
     Done,
 }
@@ -62,7 +82,7 @@ pub enum SimEvent {
 #[derive(Clone, Debug)]
 pub struct SatInfo {
     /// PRN number (1–32).
-    pub prn:    u8,
+    pub prn: u8,
     /// Azimuth angle in degrees (0 = North, clockwise).
     pub az_deg: f64,
     /// Elevation angle in degrees above horizon.
@@ -77,19 +97,19 @@ pub struct SimProgress {
     /// Steps completed so far (0-based step index).
     pub current_step: usize,
     /// Total number of steps (duration × 10).
-    pub total_steps:  usize,
+    pub total_steps: usize,
     /// Most-recent receiver latitude (degrees).
-    pub lat_deg:      f64,
+    pub lat_deg: f64,
     /// Most-recent receiver longitude (degrees).
-    pub lon_deg:      f64,
+    pub lon_deg: f64,
     /// Most-recent receiver height above WGS-84 ellipsoid (metres).
-    pub height_m:     f64,
+    pub height_m: f64,
     /// Currently-tracked satellites (updated once per second).
-    pub satellites:   Vec<SatInfo>,
+    pub satellites: Vec<SatInfo>,
     /// Set to `true` when the simulation has finished (normally or via stop).
-    pub finished:     bool,
+    pub finished: bool,
     /// Non-empty if the simulation ended with an error.
-    pub error:        Option<String>,
+    pub error: Option<String>,
 }
 
 /// Handle to a simulation running on a background OS thread.
@@ -112,10 +132,10 @@ pub struct SimProgress {
 /// ```
 pub struct SimulatorHandle {
     /// Stop flag — set to `true` to halt the simulation early.
-    pub stop:     Arc<AtomicBool>,
+    pub stop: Arc<AtomicBool>,
     /// Shared progress state, updated by the simulation thread every step.
     pub progress: Arc<Mutex<SimProgress>>,
-    thread:       std::thread::JoinHandle<Result<(), SimError>>,
+    thread: std::thread::JoinHandle<Result<(), SimError>>,
 }
 
 impl SimulatorHandle {
@@ -136,10 +156,7 @@ impl SimulatorHandle {
 
     /// Return `true` if the simulation has finished (naturally or via stop).
     pub fn is_done(&self) -> bool {
-        self.progress
-            .lock()
-            .map(|p| p.finished)
-            .unwrap_or(true)
+        self.progress.lock().map(|p| p.finished).unwrap_or(true)
     }
 
     /// Block until the simulation thread finishes and return its result.
@@ -163,16 +180,20 @@ impl SimulatorHandle {
 #[derive(Debug, Clone)]
 pub struct InteractiveState {
     /// Current heading in degrees, measured clockwise from North.
-    pub bearing_deg:   f64,
+    pub bearing_deg: f64,
     /// Horizontal ground speed in m/s.
-    pub speed_ms:      f64,
+    pub speed_ms: f64,
     /// Vertical speed in m/s (positive = ascending).
     pub vert_speed_ms: f64,
 }
 
 impl Default for InteractiveState {
     fn default() -> Self {
-        Self { bearing_deg: 0.0, speed_ms: 0.0, vert_speed_ms: 0.0 }
+        Self {
+            bearing_deg: 0.0,
+            speed_ms: 0.0,
+            vert_speed_ms: 0.0,
+        }
     }
 }
 
@@ -180,55 +201,55 @@ impl Default for InteractiveState {
 
 /// Builder for [`Simulator`].  Use [`Simulator::builder`] to obtain one.
 pub struct SimulatorBuilder {
-    rinex:         Option<String>,
-    location:      Option<Location>,
-    motion_file:   Option<String>,
-    start:         StartTime,
-    duration:      u32,
-    output:        SdrOutput,
-    on_event:      Option<Box<dyn Fn(SimEvent) + Send + Sync + 'static>>,
-    ppb:           i32,
-    elev_mask:     f64,
-    interactive:   bool,
-    log_path:      Option<String>,
-    blocked_prns:  Vec<u8>,
-    external_stop:  Option<Arc<AtomicBool>>,
+    rinex: Option<String>,
+    location: Option<Location>,
+    motion_file: Option<String>,
+    start: StartTime,
+    duration: u32,
+    output: SdrOutput,
+    on_event: Option<Box<dyn Fn(SimEvent) + Send + Sync + 'static>>,
+    ppb: i32,
+    elev_mask: f64,
+    interactive: bool,
+    log_path: Option<String>,
+    blocked_prns: Vec<u8>,
+    external_stop: Option<Arc<AtomicBool>>,
     external_istate: Option<Arc<Mutex<InteractiveState>>>,
-    ionospheric_disable:    bool,
-    time_override:          bool,
-    fixed_gain:             Option<i32>,
-    leap:                   Option<(i32, i32, i32)>,
-    hackrf_sample_rate:     Option<f64>,
-    hackrf_center_freq:     Option<u64>,
+    ionospheric_disable: bool,
+    time_override: bool,
+    fixed_gain: Option<i32>,
+    leap: Option<(i32, i32, i32)>,
+    hackrf_sample_rate: Option<f64>,
+    hackrf_center_freq: Option<u64>,
     hackrf_baseband_filter: Option<u32>,
-    external_pause:         Option<Arc<AtomicBool>>,
+    external_pause: Option<Arc<AtomicBool>>,
 }
 
 impl Default for SimulatorBuilder {
     fn default() -> Self {
         Self {
-            rinex:         None,
-            location:      None,
-            motion_file:   None,
-            start:         StartTime::Now,
-            duration:      300,
-            output:        SdrOutput::Null,
-            on_event:      None,
-            ppb:           0,
-            elev_mask:     0.0,
-            interactive:   false,
-            log_path:      None,
-            blocked_prns:  Vec::new(),
-            external_stop:  None,
+            rinex: None,
+            location: None,
+            motion_file: None,
+            start: StartTime::Now,
+            duration: 300,
+            output: SdrOutput::Null,
+            on_event: None,
+            ppb: 0,
+            elev_mask: 0.0,
+            interactive: false,
+            log_path: None,
+            blocked_prns: Vec::new(),
+            external_stop: None,
             external_istate: None,
-            ionospheric_disable:    false,
-            time_override:          false,
-            fixed_gain:             None,
-            leap:                   None,
-            hackrf_sample_rate:     None,
-            hackrf_center_freq:     None,
+            ionospheric_disable: false,
+            time_override: false,
+            fixed_gain: None,
+            leap: None,
+            hackrf_sample_rate: None,
+            hackrf_center_freq: None,
             hackrf_baseband_filter: None,
-            external_pause:         None,
+            external_pause: None,
         }
     }
 }
@@ -236,7 +257,8 @@ impl Default for SimulatorBuilder {
 impl SimulatorBuilder {
     /// Path to a RINEX 2 or 3 navigation file (`.n`, `.rnx`, or `.gz`).
     pub fn rinex(mut self, path: impl Into<String>) -> Self {
-        self.rinex = Some(path.into()); self
+        self.rinex = Some(path.into());
+        self
     }
 
     /// Path to a CSV motion file (`time,ecef_x,ecef_y,ecef_z`).
@@ -246,44 +268,52 @@ impl SimulatorBuilder {
     /// When provided, overrides the fixed `-l` location and sets duration to
     /// the number of waypoints (capped by `-d` if specified).
     pub fn motion_file(mut self, path: impl Into<String>) -> Self {
-        self.motion_file = Some(path.into()); self
+        self.motion_file = Some(path.into());
+        self
     }
 
     /// Simulated receiver location.
     pub fn location(mut self, l: Location) -> Self {
-        self.location = Some(l); self
+        self.location = Some(l);
+        self
     }
 
     /// When to begin the simulation.  Defaults to the current system time.
     pub fn start_time(mut self, t: StartTime) -> Self {
-        self.start = t; self
+        self.start = t;
+        self
     }
 
     /// Simulation duration in seconds.  Defaults to 300 s.
     pub fn duration_secs(mut self, s: u32) -> Self {
-        self.duration = s; self
+        self.duration = s;
+        self
     }
 
     /// Output sink (`HackRF`, IQ file, or null).  Defaults to `Null`.
     pub fn output(mut self, o: SdrOutput) -> Self {
-        self.output = o; self
+        self.output = o;
+        self
     }
 
     /// Callback invoked for each [`SimEvent`].
     pub fn on_event(mut self, f: impl Fn(SimEvent) + Send + Sync + 'static) -> Self {
-        self.on_event = Some(Box::new(f)); self
+        self.on_event = Some(Box::new(f));
+        self
     }
 
     /// Oscillator frequency offset in parts-per-billion.
     ///
     /// Positive PPB → oscillator runs fast → signal frequency is shifted down.
     pub fn ppb(mut self, ppb: i32) -> Self {
-        self.ppb = ppb; self
+        self.ppb = ppb;
+        self
     }
 
     /// Minimum elevation angle (degrees) for a satellite to be included.
     pub fn elevation_mask_deg(mut self, deg: f64) -> Self {
-        self.elev_mask = deg.to_radians(); self
+        self.elev_mask = deg.to_radians();
+        self
     }
 
     /// Write a CSV position log during the simulation.
@@ -292,7 +322,8 @@ impl SimulatorBuilder {
     /// step (every 100 ms), useful for comparing the simulated trajectory
     /// against what a GPS receiver reports back.
     pub fn log_path(mut self, path: impl Into<String>) -> Self {
-        self.log_path = Some(path.into()); self
+        self.log_path = Some(path.into());
+        self
     }
 
     /// Block specific satellites (by PRN, 1–32) from being simulated.
@@ -307,7 +338,8 @@ impl SimulatorBuilder {
     /// Simulator::builder().block_prns(vec![5, 12, 23]);
     /// ```
     pub fn block_prns(mut self, prns: Vec<u8>) -> Self {
-        self.blocked_prns = prns; self
+        self.blocked_prns = prns;
+        self
     }
 
     /// Enable keyboard-controlled interactive mode.
@@ -318,7 +350,8 @@ impl SimulatorBuilder {
     /// - `w` / `s` — vertical speed +1 m/s / −1 m/s (up/down)
     /// - `x`       — stop simulation and exit
     pub fn interactive(mut self, yes: bool) -> Self {
-        self.interactive = yes; self
+        self.interactive = yes;
+        self
     }
 
     /// Inject an externally-created stop flag (e.g., from a GUI "Stop" button).
@@ -330,7 +363,8 @@ impl SimulatorBuilder {
     /// See also [`Simulator::run_async`] which returns a [`SimulatorHandle`]
     /// containing a stop flag automatically.
     pub fn with_stop(mut self, stop: Arc<AtomicBool>) -> Self {
-        self.external_stop = Some(stop); self
+        self.external_stop = Some(stop);
+        self
     }
 
     /// Inject an externally-managed [`InteractiveState`] for GUI-driven control.
@@ -352,14 +386,16 @@ impl SimulatorBuilder {
     /// When `true`, ionospheric delay is set to zero. Useful for spacecraft
     /// scenarios above the ionosphere.
     pub fn ionospheric_disable(mut self, yes: bool) -> Self {
-        self.ionospheric_disable = yes; self
+        self.ionospheric_disable = yes;
+        self
     }
 
     /// Shift all ephemeris TOC/TOE values to match the scenario start time.
     ///
     /// When `true`, allows any RINEX file to be used at an arbitrary time.
     pub fn time_override(mut self, yes: bool) -> Self {
-        self.time_override = yes; self
+        self.time_override = yes;
+        self
     }
 
     /// Override the per-satellite gain with a fixed value, disabling path loss.
@@ -367,7 +403,8 @@ impl SimulatorBuilder {
     /// When `Some(v)`, all satellite signals are transmitted at the same
     /// constant amplitude `v` regardless of elevation or distance.
     pub fn fixed_gain(mut self, gain: Option<i32>) -> Self {
-        self.fixed_gain = gain; self
+        self.fixed_gain = gain;
+        self
     }
 
     /// Override leap second parameters from the RINEX file.
@@ -376,24 +413,28 @@ impl SimulatorBuilder {
     /// - `day`:   Day of week (1 = Sunday, 7 = Saturday).
     /// - `delta`: Delta leap seconds (GPS − UTC offset in whole seconds).
     pub fn leap_override(mut self, params: Option<(i32, i32, i32)>) -> Self {
-        self.leap = params; self
+        self.leap = params;
+        self
     }
 
     /// Override the `HackRF` sample rate (Hz).  Defaults to 3 MSPS.
     pub fn hackrf_sample_rate(mut self, hz: f64) -> Self {
-        self.hackrf_sample_rate = Some(hz); self
+        self.hackrf_sample_rate = Some(hz);
+        self
     }
 
     /// Override the `HackRF` centre frequency (Hz).  Defaults to GPS L1 C/A.
     pub fn hackrf_center_freq(mut self, hz: u64) -> Self {
-        self.hackrf_center_freq = Some(hz); self
+        self.hackrf_center_freq = Some(hz);
+        self
     }
 
     /// Override the `HackRF` baseband filter bandwidth (Hz).
     ///
     /// When not set, `set_sample_rate_auto` chooses the filter automatically.
     pub fn hackrf_baseband_filter(mut self, hz: u32) -> Self {
-        self.hackrf_baseband_filter = Some(hz); self
+        self.hackrf_baseband_filter = Some(hz);
+        self
     }
 
     /// Inject an externally-created pause flag.
@@ -402,7 +443,8 @@ impl SimulatorBuilder {
     /// at the current receiver position but does not advance along the route.
     /// Set the flag back to `false` to resume normal playback.
     pub fn with_pause(mut self, pause: Arc<AtomicBool>) -> Self {
-        self.external_pause = Some(pause); self
+        self.external_pause = Some(pause);
+        self
     }
 
     /// Load the RINEX file and build the [`Simulator`].
@@ -410,20 +452,22 @@ impl SimulatorBuilder {
     /// # Errors
     /// Returns an error if the RINEX file cannot be opened or parsed.
     pub fn build(self) -> Result<Simulator, SimError> {
-        let path = self.rinex.ok_or_else(|| SimError::Rinex("no RINEX file specified".into()))?;
-        let nav  = super::rinex::load(&path)?;
+        let path = self
+            .rinex
+            .ok_or_else(|| SimError::Rinex("no RINEX file specified".into()))?;
+        let nav = super::rinex::load(&path)?;
 
         // Load motion CSV if provided; otherwise the fixed location is used.
         let waypoints = match self.motion_file {
             Some(p) => load_motion_csv(&p)?,
-            None    => Vec::new(),
+            None => Vec::new(),
         };
 
         // Location is required only when no motion file is given.
         let loc = if waypoints.is_empty() {
-            self.location.ok_or_else(|| SimError::Rinex(
-                "no location specified — use -l or supply a -m motion file".into()
-            ))?
+            self.location.ok_or_else(|| {
+                SimError::Rinex("no location specified — use -l or supply a -m motion file".into())
+            })?
         } else {
             // Use first waypoint converted to LLH as the nominal location.
             self.location.unwrap_or_else(|| {
@@ -437,26 +481,27 @@ impl SimulatorBuilder {
             nav,
             loc,
             waypoints,
-            start:        self.start,
-            duration:     self.duration,
-            output:       self.output,
-            on_event:     self.on_event,
-            ppb:          self.ppb,
-            elev_mask:    self.elev_mask,
-            interactive:  self.interactive,
-            log_path:     self.log_path,
+            start: self.start,
+            duration: self.duration,
+            output: self.output,
+            on_event: self.on_event,
+            ppb: self.ppb,
+            elev_mask: self.elev_mask,
+            interactive: self.interactive,
+            log_path: self.log_path,
             blocked_prns: self.blocked_prns,
-            stop:            self.external_stop
-                                 .unwrap_or_else(|| Arc::new(AtomicBool::new(false))),
+            stop: self
+                .external_stop
+                .unwrap_or_else(|| Arc::new(AtomicBool::new(false))),
             external_istate: self.external_istate,
-            ionospheric_disable:    self.ionospheric_disable,
-            time_override:          self.time_override,
-            fixed_gain:             self.fixed_gain,
-            leap:                   self.leap,
-            hackrf_sample_rate:     self.hackrf_sample_rate,
-            hackrf_center_freq:     self.hackrf_center_freq,
+            ionospheric_disable: self.ionospheric_disable,
+            time_override: self.time_override,
+            fixed_gain: self.fixed_gain,
+            leap: self.leap,
+            hackrf_sample_rate: self.hackrf_sample_rate,
+            hackrf_center_freq: self.hackrf_center_freq,
             hackrf_baseband_filter: self.hackrf_baseband_filter,
-            pause:                  self.external_pause,
+            pause: self.external_pause,
         })
     }
 }
@@ -467,34 +512,36 @@ impl SimulatorBuilder {
 ///
 /// Obtain via [`Simulator::builder`] → [`SimulatorBuilder::build`].
 pub struct Simulator {
-    nav:          NavData,
-    loc:          Location,
+    nav: NavData,
+    loc: Location,
     /// ECEF waypoints loaded from a motion CSV.  Empty = fixed position.
-    waypoints:    Vec<[f64; 3]>,
-    start:        StartTime,
-    duration:     u32,
-    output:       SdrOutput,
-    on_event:     Option<Box<dyn Fn(SimEvent) + Send + Sync + 'static>>,
-    ppb:          i32,
-    elev_mask:    f64,
-    interactive:  bool,
-    log_path:     Option<String>,
+    waypoints: Vec<[f64; 3]>,
+    start: StartTime,
+    duration: u32,
+    output: SdrOutput,
+    on_event: Option<Box<dyn Fn(SimEvent) + Send + Sync + 'static>>,
+    ppb: i32,
+    elev_mask: f64,
+    interactive: bool,
+    log_path: Option<String>,
     blocked_prns: Vec<u8>,
-    stop:            Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
     external_istate: Option<Arc<Mutex<InteractiveState>>>,
-    ionospheric_disable:    bool,
-    time_override:          bool,
-    fixed_gain:             Option<i32>,
-    leap:                   Option<(i32, i32, i32)>,
-    hackrf_sample_rate:     Option<f64>,
-    hackrf_center_freq:     Option<u64>,
+    ionospheric_disable: bool,
+    time_override: bool,
+    fixed_gain: Option<i32>,
+    leap: Option<(i32, i32, i32)>,
+    hackrf_sample_rate: Option<f64>,
+    hackrf_center_freq: Option<u64>,
     hackrf_baseband_filter: Option<u32>,
-    pause:                  Option<Arc<AtomicBool>>,
+    pause: Option<Arc<AtomicBool>>,
 }
 
 impl Simulator {
     /// Return a builder with all settings at their defaults.
-    pub fn builder() -> SimulatorBuilder { SimulatorBuilder::default() }
+    pub fn builder() -> SimulatorBuilder {
+        SimulatorBuilder::default()
+    }
 
     /// Return a handle that can be used to stop the simulation from another thread.
     ///
@@ -508,7 +555,9 @@ impl Simulator {
     /// });
     /// sim.run().unwrap();
     /// ```
-    pub fn stop_handle(&self) -> Arc<AtomicBool> { self.stop.clone() }
+    pub fn stop_handle(&self) -> Arc<AtomicBool> {
+        self.stop.clone()
+    }
 
     /// Run the simulation on a background OS thread and return a [`SimulatorHandle`].
     ///
@@ -523,30 +572,47 @@ impl Simulator {
     /// Panics if the OS cannot spawn a new thread.
     #[must_use]
     pub fn run_async(mut self) -> SimulatorHandle {
-        let stop     = self.stop.clone();
+        let stop = self.stop.clone();
         let progress = Arc::new(Mutex::new(SimProgress::default()));
-        let prog2    = progress.clone();
+        let prog2 = progress.clone();
 
         // Extract the original callback (if any) and replace self.on_event with
         // a wrapper that updates SimProgress AND forwards to the original callback.
         let orig_cb = self.on_event.take();
         self.on_event = Some(Box::new(move |event| {
             match &event {
-                SimEvent::Progress { current_step, total_steps, .. } => {
+                SimEvent::Progress {
+                    current_step,
+                    total_steps,
+                    ..
+                } => {
                     let mut p = prog2.lock().unwrap_or_else(|e| e.into_inner());
                     p.current_step = *current_step;
-                    p.total_steps  = *total_steps;
+                    p.total_steps = *total_steps;
                 }
-                SimEvent::Position { lat_deg, lon_deg, height_m } => {
+                SimEvent::Position {
+                    lat_deg,
+                    lon_deg,
+                    height_m,
+                } => {
                     let mut p = prog2.lock().unwrap_or_else(|e| e.into_inner());
-                    p.lat_deg  = *lat_deg;
-                    p.lon_deg  = *lon_deg;
+                    p.lat_deg = *lat_deg;
+                    p.lon_deg = *lon_deg;
                     p.height_m = *height_m;
                     p.satellites.clear(); // reset satellite list at start of each second
                 }
-                SimEvent::Satellite { prn, az_deg, el_deg, .. } => {
+                SimEvent::Satellite {
+                    prn,
+                    az_deg,
+                    el_deg,
+                    ..
+                } => {
                     let mut p = prog2.lock().unwrap_or_else(|e| e.into_inner());
-                    p.satellites.push(SatInfo { prn: *prn, az_deg: *az_deg, el_deg: *el_deg });
+                    p.satellites.push(SatInfo {
+                        prn: *prn,
+                        az_deg: *az_deg,
+                        el_deg: *el_deg,
+                    });
                 }
                 SimEvent::Done => {
                     let mut p = prog2.lock().unwrap_or_else(|e| e.into_inner());
@@ -564,7 +630,11 @@ impl Simulator {
             .spawn(move || self.run())
             .expect("failed to spawn simulation thread");
 
-        SimulatorHandle { stop, progress, thread }
+        SimulatorHandle {
+            stop,
+            progress,
+            thread,
+        }
     }
 
     /// Run the simulation until `duration` seconds have elapsed or the stop
@@ -588,8 +658,8 @@ impl Simulator {
         // Apply leap second override.
         if let Some((week, day, delta)) = self.leap {
             self.nav.iono.dtls = delta;
-            self.nav.iono.wnt  = week;
-            self.nav.iono.tot  = day;
+            self.nav.iono.wnt = week;
+            self.nav.iono.tot = day;
         }
         // Apply time override: shift all ephemeris TOC/TOE to the start time.
         if self.time_override {
@@ -605,10 +675,11 @@ impl Simulator {
 
         // Create shared interactive state and spawn keyboard thread if needed.
         // When an external state is injected (GUI mode), skip the stdin thread.
-        let istate: Option<Arc<Mutex<InteractiveState>>> = if let Some(ext) = &self.external_istate {
+        let istate: Option<Arc<Mutex<InteractiveState>>> = if let Some(ext) = &self.external_istate
+        {
             Some(Arc::clone(ext))
         } else if self.interactive {
-            let s  = Arc::new(Mutex::new(InteractiveState::default()));
+            let s = Arc::new(Mutex::new(InteractiveState::default()));
             let s2 = s.clone();
             let stop2 = self.stop.clone();
             std::thread::Builder::new()
@@ -640,12 +711,8 @@ impl Simulator {
             SdrOutput::HackRf { gain_db, amp } => {
                 self.run_hackrf(g0, rx_ecef, ieph, gain_db, amp, istate, log_file)
             }
-            SdrOutput::IqFile { path } => {
-                self.run_file(g0, rx_ecef, ieph, &path, istate, log_file)
-            }
-            SdrOutput::Null => {
-                self.run_null(g0, rx_ecef, ieph, istate, log_file)
-            }
+            SdrOutput::IqFile { path } => self.run_file(g0, rx_ecef, ieph, &path, istate, log_file),
+            SdrOutput::Null => self.run_null(g0, rx_ecef, ieph, istate, log_file),
             SdrOutput::PlutoSdr { host, gain_db } => {
                 self.run_plutosdr(g0, rx_ecef, ieph, host, gain_db, istate, log_file)
             }
@@ -660,46 +727,71 @@ impl Simulator {
 
     // ── Output backends ───────────────────────────────────────────────────────
 
-    #[expect(clippy::too_many_arguments, reason = "all parameters are required for the backend dispatch; cannot bundle without polluting caller")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "all parameters are required for the backend dispatch; cannot bundle without polluting caller"
+    )]
     fn run_hackrf(
         self,
-        g0:       GpsTime,
-        rx_ecef:  [f64; 3],
-        ieph:     usize,
-        gain_db:  i32,
-        amp:      bool,
-        istate:   Option<Arc<Mutex<InteractiveState>>>,
+        g0: GpsTime,
+        rx_ecef: [f64; 3],
+        ieph: usize,
+        gain_db: i32,
+        amp: bool,
+        istate: Option<Arc<Mutex<InteractiveState>>>,
         log_file: Option<BufWriter<std::fs::File>>,
     ) -> Result<(), SimError> {
         let mut dev = super::hackrf::GpsHackRf::open()?;
-        dev.configure(gain_db, amp, self.ppb, self.hackrf_sample_rate, self.hackrf_center_freq, self.hackrf_baseband_filter)?;
+        dev.configure(
+            gain_db,
+            amp,
+            self.ppb,
+            self.hackrf_sample_rate,
+            self.hackrf_center_freq,
+            self.hackrf_baseband_filter,
+        )?;
         let mut ep = dev.enter_tx()?;
 
-        let fifo     = IqFifo::new(8);
+        let fifo = IqFifo::new(8);
         let consumer = fifo.consumer;
         let producer = fifo.producer;
 
-        let stop         = self.stop.clone();
-        let pause        = self.pause.clone();
-        let nav          = self.nav.clone();
-        let elev_mask    = self.elev_mask;
-        let duration     = self.duration;
-        let waypoints    = self.waypoints;
+        let stop = self.stop.clone();
+        let pause = self.pause.clone();
+        let nav = self.nav.clone();
+        let elev_mask = self.elev_mask;
+        let duration = self.duration;
+        let waypoints = self.waypoints;
         let blocked_prns = self.blocked_prns;
-        let fixed_gain   = self.fixed_gain;
-        let emit: Arc<dyn Fn(SimEvent) + Send + Sync> =
-            if let Some(f) = self.on_event {
-                Arc::new(f)
-            } else {
-                Arc::new(|_| {})
-            };
+        let fixed_gain = self.fixed_gain;
+        let emit: Arc<dyn Fn(SimEvent) + Send + Sync> = if let Some(f) = self.on_event {
+            Arc::new(f)
+        } else {
+            Arc::new(|_| {})
+        };
         let emit2 = emit.clone();
 
         // GPS generation thread.
         let gps_thread = std::thread::Builder::new()
             .name("gps-gen".into())
             .spawn(move || {
-                generate_iq(g0, rx_ecef, &waypoints, istate.as_ref(), &blocked_prns, &nav, ieph, duration, elev_mask, &stop, pause.as_deref(), &producer, &*emit, log_file, fixed_gain);
+                generate_iq(
+                    g0,
+                    rx_ecef,
+                    &waypoints,
+                    istate.as_ref(),
+                    &blocked_prns,
+                    &nav,
+                    ieph,
+                    duration,
+                    elev_mask,
+                    &stop,
+                    pause.as_deref(),
+                    &producer,
+                    &*emit,
+                    log_file,
+                    fixed_gain,
+                );
                 producer.shutdown();
             })
             .expect("failed to spawn GPS thread");
@@ -749,38 +841,56 @@ impl Simulator {
 
     fn run_file(
         self,
-        g0:       GpsTime,
-        rx_ecef:  [f64; 3],
-        ieph:     usize,
-        path:     &str,
-        istate:   Option<Arc<Mutex<InteractiveState>>>,
+        g0: GpsTime,
+        rx_ecef: [f64; 3],
+        ieph: usize,
+        path: &str,
+        istate: Option<Arc<Mutex<InteractiveState>>>,
         log_file: Option<BufWriter<std::fs::File>>,
     ) -> Result<(), SimError> {
         let mut file = std::fs::File::create(path)?;
 
-        let emit: Arc<dyn Fn(SimEvent) + Send + Sync> =
-            if let Some(f) = self.on_event { Arc::new(f) } else { Arc::new(|_| {}) };
+        let emit: Arc<dyn Fn(SimEvent) + Send + Sync> = if let Some(f) = self.on_event {
+            Arc::new(f)
+        } else {
+            Arc::new(|_| {})
+        };
         let emit2 = emit.clone();
 
         // Write to a Vec<i8> sink instead of a FIFO, then flush to disk.
         // No real-time gate for file output — run as fast as possible.
-        let fifo     = IqFifo::new(4);
+        let fifo = IqFifo::new(4);
         let consumer = fifo.consumer;
         let producer = fifo.producer;
-        let stop     = self.stop.clone();
-        let pause    = self.pause.clone();
-        let nav      = self.nav.clone();
+        let stop = self.stop.clone();
+        let pause = self.pause.clone();
+        let nav = self.nav.clone();
 
-        let waypoints    = self.waypoints;
+        let waypoints = self.waypoints;
         let blocked_prns = self.blocked_prns;
-        let duration     = self.duration;
-        let elev_mask    = self.elev_mask;
-        let fixed_gain   = self.fixed_gain;
+        let duration = self.duration;
+        let elev_mask = self.elev_mask;
+        let fixed_gain = self.fixed_gain;
         let gps_thread = std::thread::Builder::new()
             .name("gps-gen".into())
             .spawn(move || {
-                generate_iq(g0, rx_ecef, &waypoints, istate.as_ref(), &blocked_prns, &nav, ieph, duration,
-                            elev_mask, &stop, pause.as_deref(), &producer, &*emit2, log_file, fixed_gain);
+                generate_iq(
+                    g0,
+                    rx_ecef,
+                    &waypoints,
+                    istate.as_ref(),
+                    &blocked_prns,
+                    &nav,
+                    ieph,
+                    duration,
+                    elev_mask,
+                    &stop,
+                    pause.as_deref(),
+                    &producer,
+                    &*emit2,
+                    log_file,
+                    fixed_gain,
+                );
                 producer.shutdown();
             })
             .expect("failed to spawn GPS thread");
@@ -797,36 +907,57 @@ impl Simulator {
         Ok(())
     }
 
-    #[expect(clippy::unnecessary_wraps, reason = "signature must match the other run_* backends which can fail")]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "signature must match the other run_* backends which can fail"
+    )]
     fn run_null(
         self,
-        g0:       GpsTime,
-        rx_ecef:  [f64; 3],
-        ieph:     usize,
-        istate:   Option<Arc<Mutex<InteractiveState>>>,
+        g0: GpsTime,
+        rx_ecef: [f64; 3],
+        ieph: usize,
+        istate: Option<Arc<Mutex<InteractiveState>>>,
         log_file: Option<BufWriter<std::fs::File>>,
     ) -> Result<(), SimError> {
-        let emit: Arc<dyn Fn(SimEvent) + Send + Sync> =
-            if let Some(f) = self.on_event { Arc::new(f) } else { Arc::new(|_| {}) };
+        let emit: Arc<dyn Fn(SimEvent) + Send + Sync> = if let Some(f) = self.on_event {
+            Arc::new(f)
+        } else {
+            Arc::new(|_| {})
+        };
         let emit2 = emit.clone();
 
-        let fifo     = IqFifo::new(2);
+        let fifo = IqFifo::new(2);
         let consumer = fifo.consumer;
         let producer = fifo.producer;
-        let stop     = self.stop.clone();
-        let pause    = self.pause.clone();
-        let nav      = self.nav.clone();
+        let stop = self.stop.clone();
+        let pause = self.pause.clone();
+        let nav = self.nav.clone();
 
-        let waypoints    = self.waypoints;
+        let waypoints = self.waypoints;
         let blocked_prns = self.blocked_prns;
-        let duration     = self.duration;
-        let elev_mask    = self.elev_mask;
-        let fixed_gain   = self.fixed_gain;
+        let duration = self.duration;
+        let elev_mask = self.elev_mask;
+        let fixed_gain = self.fixed_gain;
         let gps_thread = std::thread::Builder::new()
             .name("gps-gen".into())
             .spawn(move || {
-                generate_iq(g0, rx_ecef, &waypoints, istate.as_ref(), &blocked_prns, &nav, ieph, duration,
-                            elev_mask, &stop, pause.as_deref(), &producer, &*emit2, log_file, fixed_gain);
+                generate_iq(
+                    g0,
+                    rx_ecef,
+                    &waypoints,
+                    istate.as_ref(),
+                    &blocked_prns,
+                    &nav,
+                    ieph,
+                    duration,
+                    elev_mask,
+                    &stop,
+                    pause.as_deref(),
+                    &producer,
+                    &*emit2,
+                    log_file,
+                    fixed_gain,
+                );
                 producer.shutdown();
             })
             .expect("failed to spawn GPS thread");
@@ -841,21 +972,27 @@ impl Simulator {
 
     // ── PlutoSDR backend ──────────────────────────────────────────────────────
 
-    #[expect(clippy::too_many_arguments, reason = "signature must mirror caller dispatch; all parameters required")]
-    #[expect(clippy::unused_self, reason = "stub for unbuilt PlutoSDR feature; self would be used in a full impl")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signature must mirror caller dispatch; all parameters required"
+    )]
+    #[expect(
+        clippy::unused_self,
+        reason = "stub for unbuilt PlutoSDR feature; self would be used in a full impl"
+    )]
     fn run_plutosdr(
         self,
-        g0:       GpsTime,
-        rx_ecef:  [f64; 3],
-        ieph:     usize,
-        host:     String,
-        gain_db:  i32,
-        istate:   Option<Arc<Mutex<InteractiveState>>>,
+        g0: GpsTime,
+        rx_ecef: [f64; 3],
+        ieph: usize,
+        host: String,
+        gain_db: i32,
+        istate: Option<Arc<Mutex<InteractiveState>>>,
         log_file: Option<BufWriter<std::fs::File>>,
     ) -> Result<(), SimError> {
         let _unused = (g0, rx_ecef, ieph, host, gain_db, istate, log_file);
         Err(SimError::Config(
-            "PlutoSDR support is not available in this build.".into()
+            "PlutoSDR support is not available in this build.".into(),
         ))
     }
 
@@ -863,11 +1000,11 @@ impl Simulator {
 
     fn run_udp(
         self,
-        g0:       GpsTime,
-        rx_ecef:  [f64; 3],
-        ieph:     usize,
-        addr:     &str,
-        istate:   Option<Arc<Mutex<InteractiveState>>>,
+        g0: GpsTime,
+        rx_ecef: [f64; 3],
+        ieph: usize,
+        addr: &str,
+        istate: Option<Arc<Mutex<InteractiveState>>>,
         log_file: Option<BufWriter<std::fs::File>>,
     ) -> Result<(), SimError> {
         let sock = UdpSocket::bind("0.0.0.0:0")
@@ -875,27 +1012,45 @@ impl Simulator {
         sock.connect(addr)
             .map_err(|e| SimError::Network(format!("UDP connect to {addr}: {e}")))?;
 
-        let emit: Arc<dyn Fn(SimEvent) + Send + Sync> =
-            if let Some(f) = self.on_event { Arc::new(f) } else { Arc::new(|_| {}) };
+        let emit: Arc<dyn Fn(SimEvent) + Send + Sync> = if let Some(f) = self.on_event {
+            Arc::new(f)
+        } else {
+            Arc::new(|_| {})
+        };
         let emit2 = emit.clone();
 
-        let fifo     = IqFifo::new(4);
+        let fifo = IqFifo::new(4);
         let consumer = fifo.consumer;
         let producer = fifo.producer;
-        let stop     = self.stop.clone();
-        let pause    = self.pause.clone();
-        let nav      = self.nav.clone();
-        let waypoints    = self.waypoints;
+        let stop = self.stop.clone();
+        let pause = self.pause.clone();
+        let nav = self.nav.clone();
+        let waypoints = self.waypoints;
         let blocked_prns = self.blocked_prns;
-        let duration     = self.duration;
-        let elev_mask    = self.elev_mask;
-        let fixed_gain   = self.fixed_gain;
+        let duration = self.duration;
+        let elev_mask = self.elev_mask;
+        let fixed_gain = self.fixed_gain;
 
         let gps_thread = std::thread::Builder::new()
             .name("gps-gen".into())
             .spawn(move || {
-                generate_iq(g0, rx_ecef, &waypoints, istate.as_ref(), &blocked_prns, &nav, ieph, duration,
-                            elev_mask, &stop, pause.as_deref(), &producer, &*emit2, log_file, fixed_gain);
+                generate_iq(
+                    g0,
+                    rx_ecef,
+                    &waypoints,
+                    istate.as_ref(),
+                    &blocked_prns,
+                    &nav,
+                    ieph,
+                    duration,
+                    elev_mask,
+                    &stop,
+                    pause.as_deref(),
+                    &producer,
+                    &*emit2,
+                    log_file,
+                    fixed_gain,
+                );
                 producer.shutdown();
             })
             .expect("failed to spawn GPS thread");
@@ -928,42 +1083,61 @@ impl Simulator {
 
     fn run_tcp(
         self,
-        g0:       GpsTime,
-        rx_ecef:  [f64; 3],
-        ieph:     usize,
-        port:     u16,
-        istate:   Option<Arc<Mutex<InteractiveState>>>,
+        g0: GpsTime,
+        rx_ecef: [f64; 3],
+        ieph: usize,
+        port: u16,
+        istate: Option<Arc<Mutex<InteractiveState>>>,
         log_file: Option<BufWriter<std::fs::File>>,
     ) -> Result<(), SimError> {
         let listener = TcpListener::bind(format!("0.0.0.0:{port}"))
             .map_err(|e| SimError::Network(format!("TCP bind port {port}: {e}")))?;
 
         log::info!("TCP: waiting for client on port {port}");
-        let (mut client, peer) = listener.accept()
+        let (mut client, peer) = listener
+            .accept()
             .map_err(|e| SimError::Network(format!("TCP accept: {e}")))?;
         log::info!("TCP: client connected from {peer}");
 
-        let emit: Arc<dyn Fn(SimEvent) + Send + Sync> =
-            if let Some(f) = self.on_event { Arc::new(f) } else { Arc::new(|_| {}) };
+        let emit: Arc<dyn Fn(SimEvent) + Send + Sync> = if let Some(f) = self.on_event {
+            Arc::new(f)
+        } else {
+            Arc::new(|_| {})
+        };
         let emit2 = emit.clone();
 
-        let fifo     = IqFifo::new(4);
+        let fifo = IqFifo::new(4);
         let consumer = fifo.consumer;
         let producer = fifo.producer;
-        let stop     = self.stop.clone();
-        let pause    = self.pause.clone();
-        let nav      = self.nav.clone();
-        let waypoints    = self.waypoints;
+        let stop = self.stop.clone();
+        let pause = self.pause.clone();
+        let nav = self.nav.clone();
+        let waypoints = self.waypoints;
         let blocked_prns = self.blocked_prns;
-        let duration     = self.duration;
-        let elev_mask    = self.elev_mask;
-        let fixed_gain   = self.fixed_gain;
+        let duration = self.duration;
+        let elev_mask = self.elev_mask;
+        let fixed_gain = self.fixed_gain;
 
         let gps_thread = std::thread::Builder::new()
             .name("gps-gen".into())
             .spawn(move || {
-                generate_iq(g0, rx_ecef, &waypoints, istate.as_ref(), &blocked_prns, &nav, ieph, duration,
-                            elev_mask, &stop, pause.as_deref(), &producer, &*emit2, log_file, fixed_gain);
+                generate_iq(
+                    g0,
+                    rx_ecef,
+                    &waypoints,
+                    istate.as_ref(),
+                    &blocked_prns,
+                    &nav,
+                    ieph,
+                    duration,
+                    elev_mask,
+                    &stop,
+                    pause.as_deref(),
+                    &producer,
+                    &*emit2,
+                    log_file,
+                    fixed_gain,
+                );
                 producer.shutdown();
             })
             .expect("failed to spawn GPS thread");
@@ -971,7 +1145,9 @@ impl Simulator {
         while let Some(buf) = consumer.dequeue() {
             let bytes: Vec<u8> = buf.iter().map(|&b| b as u8).collect();
             consumer.release(buf);
-            if client.write_all(&bytes).is_err() { break; } // client disconnected
+            if client.write_all(&bytes).is_err() {
+                break;
+            } // client disconnected
         }
         gps_thread.join().ok();
         emit(SimEvent::Done);
@@ -1004,25 +1180,34 @@ impl Simulator {
 /// - `emit`:          Event callback.
 /// - `log_file`:      Optional CSV position log file.
 /// - `fixed_gain`:  When `Some(v)`, override per-satellite gain with constant `v` (disables antenna pattern / path loss).
-#[expect(clippy::too_many_arguments, reason = "core IQ generation loop; all parameters required")]
-#[expect(clippy::too_many_lines, reason = "hot path inner loop; extracting sub-functions would add overhead")]
-#[expect(clippy::indexing_slicing, reason = "hot-path indexing is bounds-safe by construction: itable&511<512, buf_pos<HACKRF_BUF_BYTES, iword%60<60, code_phase%1023<1023")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "core IQ generation loop; all parameters required"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "hot path inner loop; extracting sub-functions would add overhead"
+)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "hot-path indexing is bounds-safe by construction: itable&511<512, buf_pos<HACKRF_BUF_BYTES, iword%60<60, code_phase%1023<1023"
+)]
 fn generate_iq(
-    mut grx:      GpsTime,
-    rx_ecef:      [f64; 3],
-    waypoints:    &[[f64; 3]],
-    interactive:  Option<&Arc<Mutex<InteractiveState>>>,
+    mut grx: GpsTime,
+    rx_ecef: [f64; 3],
+    waypoints: &[[f64; 3]],
+    interactive: Option<&Arc<Mutex<InteractiveState>>>,
     blocked_prns: &[u8],
-    nav:          &NavData,
-    ieph:         usize,
-    duration:     u32,
-    elev_mask:    f64,
-    stop:         &AtomicBool,
-    pause:        Option<&AtomicBool>,
-    producer:     &super::fifo::IqProducer,
-    emit:         &dyn Fn(SimEvent),
+    nav: &NavData,
+    ieph: usize,
+    duration: u32,
+    elev_mask: f64,
+    stop: &AtomicBool,
+    pause: Option<&AtomicBool>,
+    producer: &super::fifo::IqProducer,
+    emit: &dyn Fn(SimEvent),
     mut log_file: Option<BufWriter<std::fs::File>>,
-    fixed_gain:   Option<i32>,
+    fixed_gain: Option<i32>,
 ) {
     // When a motion file is provided, run for exactly the number of waypoints.
     // The `duration` cap only applies to fixed-position (no motion file) runs.
@@ -1042,7 +1227,7 @@ fn generate_iq(
     // ── Initial channel allocation ────────────────────────────────────────────
     let mut channels: Vec<Channel> = (1u8..=32)
         .filter(|&prn| eph_set.get(prn as usize - 1).is_some_and(|e| e.valid))
-        .filter(|prn| !blocked_prns.contains(prn))        // feature 8: PRN masking
+        .filter(|prn| !blocked_prns.contains(prn)) // feature 8: PRN masking
         .filter_map(|prn| {
             let eph = eph_set.get(prn as usize - 1)?;
             Channel::new(prn, eph, &nav.iono, grx, rx_ecef0)
@@ -1053,43 +1238,53 @@ fn generate_iq(
 
     emit(SimEvent::Status(format!(
         "Tracking {} satellites at GPS week {} sec {:.1}\n",
-        channels.len(), grx.week, grx.sec
+        channels.len(),
+        grx.week,
+        grx.sec
     )));
 
     // Pre-compute linear antenna gain table (37 elevations at 5° steps).
     let ant = ant_pattern_linear();
 
     // Acquire the first output buffer from the FIFO free pool.
-    let mut buf     = producer.acquire();
+    let mut buf = producer.acquire();
     let mut buf_pos = 0usize;
 
     // ── Main simulation loop ──────────────────────────────────────────────────
-    let mut step      = 0usize;
+    let mut step = 0usize;
     let mut wall_step = 0u64; // counts every iteration, including paused ones
     while step < total_steps {
-        if stop.load(Ordering::Relaxed) { break; }
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
 
         let paused = pause.is_some_and(|p| p.load(Ordering::Relaxed));
 
         // Receiver position this step.
         let pos = if let Some(ist) = &interactive {
             // Interactive mode: accumulate position from bearing + speed.
-            #[expect(clippy::unwrap_used, reason = "mutex poison means another thread panicked; no recovery possible")]
+            #[expect(
+                clippy::unwrap_used,
+                reason = "mutex poison means another thread panicked; no recovery possible"
+            )]
             let state = ist.lock().unwrap();
-            let bearing_rad  = state.bearing_deg.to_radians();
-            let dx_n = state.speed_ms     * bearing_rad.cos() * STEP_SECS;
-            let dx_e = state.speed_ms     * bearing_rad.sin() * STEP_SECS;
+            let bearing_rad = state.bearing_deg.to_radians();
+            let dx_n = state.speed_ms * bearing_rad.cos() * STEP_SECS;
+            let dx_e = state.speed_ms * bearing_rad.sin() * STEP_SECS;
             let dx_u = state.vert_speed_ms * STEP_SECS;
             drop(state);
             // NEU → ECEF via transpose of the LTC rotation matrix.
             let loc = super::coords::ecef_to_llh(cur_ecef);
             let ltc = super::coords::ltc_matrix(loc);
-            cur_ecef[0] += ltc[0][0]*dx_n + ltc[1][0]*dx_e + ltc[2][0]*dx_u;
-            cur_ecef[1] += ltc[0][1]*dx_n + ltc[1][1]*dx_e + ltc[2][1]*dx_u;
-            cur_ecef[2] += ltc[0][2]*dx_n + ltc[1][2]*dx_e + ltc[2][2]*dx_u;
+            cur_ecef[0] += ltc[0][0] * dx_n + ltc[1][0] * dx_e + ltc[2][0] * dx_u;
+            cur_ecef[1] += ltc[0][1] * dx_n + ltc[1][1] * dx_e + ltc[2][1] * dx_u;
+            cur_ecef[2] += ltc[0][2] * dx_n + ltc[1][2] * dx_e + ltc[2][2] * dx_u;
             cur_ecef
         } else if !waypoints.is_empty() {
-            waypoints.get(step.min(waypoints.len() - 1)).copied().unwrap_or(rx_ecef)
+            waypoints
+                .get(step.min(waypoints.len() - 1))
+                .copied()
+                .unwrap_or(rx_ecef)
         } else {
             rx_ecef
         };
@@ -1099,21 +1294,24 @@ fn generate_iq(
         // ── Per-channel gain for this step ────────────────────────────────────
         // Amplitude = path-loss × antenna gain, scaled to an integer multiplier.
         // Path loss is normalised to GPS nominal altitude (20 200 km).
-        let gains: Vec<i32> = channels.iter().map(|ch| {
-            if let Some(fg) = fixed_gain {
-                fg
-            } else {
-                let el_deg = ch.azel[1].to_degrees();
-                let boresight_idx = ((90.0 - el_deg) / 5.0) as usize;
-                let ant_g = ant.get(boresight_idx.min(36)).copied().unwrap_or(1.0);
-                // LUT amplitude is ±250.  With ≤12 channels and gain=1 the
-                // accumulator stays within ±3000, then >>4 gives ±187 which
-                // clips harmlessly to i8.  Scale by ant_g (∈ [0.167,1.0]) via
-                // a Q4 fixed-point multiplier so low-elevation SVs are quieter.
-                // gain range: [2..16] → max sum ≤ 12×250×16 = 48 000, >>4 = 3000.
-                (ant_g * 16.0) as i32
-            }
-        }).collect();
+        let gains: Vec<i32> = channels
+            .iter()
+            .map(|ch| {
+                if let Some(fg) = fixed_gain {
+                    fg
+                } else {
+                    let el_deg = ch.azel[1].to_degrees();
+                    let boresight_idx = ((90.0 - el_deg) / 5.0) as usize;
+                    let ant_g = ant.get(boresight_idx.min(36)).copied().unwrap_or(1.0);
+                    // LUT amplitude is ±250.  With ≤12 channels and gain=1 the
+                    // accumulator stays within ±3000, then >>4 gives ±187 which
+                    // clips harmlessly to i8.  Scale by ant_g (∈ [0.167,1.0]) via
+                    // a Q4 fixed-point multiplier so low-elevation SVs are quieter.
+                    // gain range: [2..16] → max sum ≤ 12×250×16 = 48 000, >>4 = 3000.
+                    (ant_g * 16.0) as i32
+                }
+            })
+            .collect();
 
         // ── Inner sample loop (hot path) ──────────────────────────────────────
         // Force-initialise the lookup tables before entering the loop.
@@ -1145,21 +1343,23 @@ fn generate_iq(
                             ch.ibit = 0;
                             ch.iword = (ch.iword + 1) % 60;
                         }
-                        ch.data_bit =
-                            ((ch.dwrd[ch.iword] >> (29 - ch.ibit)) & 1) as i32 * 2 - 1;
+                        ch.data_bit = ((ch.dwrd[ch.iword] >> (29 - ch.ibit)) & 1) as i32 * 2 - 1;
                     }
                     ch.code_ca = ch.ca[ch.code_phase as usize % 1023] as i32;
                 }
 
                 // ── Advance carrier phase ─────────────────────────────────────
                 ch.carr_phase += ch.f_carr * DT;
-                if ch.carr_phase >= 1.0      { ch.carr_phase -= 1.0; }
-                else if ch.carr_phase < 0.0  { ch.carr_phase += 1.0; }
+                if ch.carr_phase >= 1.0 {
+                    ch.carr_phase -= 1.0;
+                } else if ch.carr_phase < 0.0 {
+                    ch.carr_phase += 1.0;
+                }
             }
 
             // ── Quantise to 8-bit signed and write interleaved I/Q ────────────
             // Right-shift by 4 to bring the summed value into the ±128 range.
-            buf[buf_pos]     = (i_acc >> 4) as i8;
+            buf[buf_pos] = (i_acc >> 4) as i8;
             buf[buf_pos + 1] = (q_acc >> 4) as i8;
             buf_pos += 2;
 
@@ -1176,7 +1376,7 @@ fn generate_iq(
         // HackRF.  For IQ-file output this gate is not necessary, but keeping
         // it here avoids overflowing the FIFO.
         let elapsed = step_start.elapsed();
-        let target  = Duration::from_millis(100);
+        let target = Duration::from_millis(100);
         if elapsed < target {
             std::thread::sleep(target - elapsed);
         }
@@ -1192,7 +1392,7 @@ fn generate_iq(
                     let rho_rate = rho.rate;
                     ch.f_carr = -rho_rate / LAMBDA_L1;
                     ch.f_code = CODE_FREQ_CA + ch.f_carr / CARR_TO_CODE;
-                    ch.azel   = rho.azel;
+                    ch.azel = rho.azel;
                 }
             }
         }
@@ -1202,7 +1402,7 @@ fn generate_iq(
         if step % 300 == 299 {
             for ch in &mut channels {
                 ch.ipage = (ch.ipage + 1) % 25;
-                ch.dwrd  = generate_nav_msg(&ch.sbf, grx, ch.ipage);
+                ch.dwrd = generate_nav_msg(&ch.sbf, grx, ch.ipage);
             }
         }
 
@@ -1217,13 +1417,17 @@ fn generate_iq(
         // Use step % 10 == 0 normally; when paused, always emit so the map stays live.
         if step % 10 == 0 || paused {
             let rx_llh = super::coords::ecef_to_llh(pos);
-            let lat_deg  = rx_llh.lat_rad.to_degrees();
-            let lon_deg  = rx_llh.lon_rad.to_degrees();
+            let lat_deg = rx_llh.lat_rad.to_degrees();
+            let lon_deg = rx_llh.lon_rad.to_degrees();
             let height_m = rx_llh.height_m;
-            emit(SimEvent::Position { lat_deg, lon_deg, height_m });
+            emit(SimEvent::Position {
+                lat_deg,
+                lon_deg,
+                height_m,
+            });
             for ch in &channels {
                 emit(SimEvent::Satellite {
-                    prn:    ch.prn,
+                    prn: ch.prn,
                     az_deg: ch.azel[0].to_degrees(),
                     el_deg: ch.azel[1].to_degrees(),
                     active: true,
@@ -1246,11 +1450,12 @@ fn generate_iq(
     // ── Flush the partial final buffer ────────────────────────────────────────
     if buf_pos > 0 {
         // Zero-pad the remainder to a full HackRF buffer.
-        for b in &mut buf[buf_pos..] { *b = 0; }
+        for b in &mut buf[buf_pos..] {
+            *b = 0;
+        }
         producer.enqueue(buf);
     }
 }
-
 
 // ── Keyboard input thread ─────────────────────────────────────────────────────
 
@@ -1264,34 +1469,46 @@ fn generate_iq(
 /// - `e` / `q` — speed +1 m/s / −1 m/s
 /// - `w` / `s` — vertical speed +1 m/s / −1 m/s
 /// - `x`       — stop simulation
-#[expect(clippy::needless_pass_by_value, reason = "Arc ownership is required for the spawned thread to keep the values alive")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Arc ownership is required for the spawned thread to keep the values alive"
+)]
 fn keyboard_thread(state: Arc<Mutex<InteractiveState>>, stop: Arc<AtomicBool>) {
     use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-    if crossterm::terminal::enable_raw_mode().is_err() { return; }
+    if crossterm::terminal::enable_raw_mode().is_err() {
+        return;
+    }
     loop {
-        if stop.load(Ordering::Relaxed) { break; }
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
         if matches!(event::poll(Duration::from_millis(50)), Ok(true)) {
             if let Ok(Event::Key(key)) = event::read() {
-                    // Only process key-press events (ignore repeats on some terminals).
-                    if key.kind == KeyEventKind::Release { continue; }
-                    #[expect(clippy::unwrap_used, reason = "mutex poison means another thread panicked; no recovery")]
-                    let mut s = state.lock().unwrap();
-                    match key.code {
-                        KeyCode::Char('a') => s.bearing_deg = (s.bearing_deg - 0.127 + 360.0) % 360.0,
-                        KeyCode::Char('d') => s.bearing_deg = (s.bearing_deg + 0.127) % 360.0,
-                        KeyCode::Char('e') => s.speed_ms += 1.0,
-                        KeyCode::Char('q') => s.speed_ms = (s.speed_ms - 1.0).max(0.0),
-                        KeyCode::Char('w') => s.vert_speed_ms += 1.0,
-                        KeyCode::Char('s') => s.vert_speed_ms -= 1.0,
-                        KeyCode::Char('x') => {
-                            drop(s);
-                            stop.store(true, Ordering::Relaxed);
-                            break;
-                        }
-                        _ => {}
+                // Only process key-press events (ignore repeats on some terminals).
+                if key.kind == KeyEventKind::Release {
+                    continue;
+                }
+                #[expect(
+                    clippy::unwrap_used,
+                    reason = "mutex poison means another thread panicked; no recovery"
+                )]
+                let mut s = state.lock().unwrap();
+                match key.code {
+                    KeyCode::Char('a') => s.bearing_deg = (s.bearing_deg - 0.127 + 360.0) % 360.0,
+                    KeyCode::Char('d') => s.bearing_deg = (s.bearing_deg + 0.127) % 360.0,
+                    KeyCode::Char('e') => s.speed_ms += 1.0,
+                    KeyCode::Char('q') => s.speed_ms = (s.speed_ms - 1.0).max(0.0),
+                    KeyCode::Char('w') => s.vert_speed_ms += 1.0,
+                    KeyCode::Char('s') => s.vert_speed_ms -= 1.0,
+                    KeyCode::Char('x') => {
+                        drop(s);
+                        stop.store(true, Ordering::Relaxed);
+                        break;
                     }
+                    _ => {}
                 }
             }
+        }
     }
     crossterm::terminal::disable_raw_mode().ok();
 }
@@ -1310,21 +1527,30 @@ fn keyboard_thread(state: Arc<Mutex<InteractiveState>>, stop: Arc<AtomicBool>) {
 /// The time column is accepted but ignored; row order determines timing.
 /// Blank lines and lines that cannot be parsed are silently skipped.
 fn load_motion_csv(path: &str) -> Result<Vec<[f64; 3]>, SimError> {
-    let content = std::fs::read_to_string(path)
-        .map_err(SimError::Io)?;
+    let content = std::fs::read_to_string(path).map_err(SimError::Io)?;
     let mut waypoints = Vec::new();
     for line in content.lines() {
         let line = line.trim();
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
         let mut parts = line.splitn(4, ',');
         let _time: Option<&str> = parts.next(); // skip time column
-        let Some(x) = parts.next().and_then(|s| s.trim().parse::<f64>().ok()) else { continue };
-        let Some(y) = parts.next().and_then(|s| s.trim().parse::<f64>().ok()) else { continue };
-        let Some(z) = parts.next().and_then(|s| s.trim().parse::<f64>().ok()) else { continue };
+        let Some(x) = parts.next().and_then(|s| s.trim().parse::<f64>().ok()) else {
+            continue;
+        };
+        let Some(y) = parts.next().and_then(|s| s.trim().parse::<f64>().ok()) else {
+            continue;
+        };
+        let Some(z) = parts.next().and_then(|s| s.trim().parse::<f64>().ok()) else {
+            continue;
+        };
         waypoints.push([x, y, z]);
     }
     if waypoints.is_empty() {
-        return Err(SimError::Rinex(format!("motion file '{path}' contains no valid waypoints")));
+        return Err(SimError::Rinex(format!(
+            "motion file '{path}' contains no valid waypoints"
+        )));
     }
     Ok(waypoints)
 }
@@ -1345,24 +1571,31 @@ fn resolve_start_time(start: StartTime, nav: &NavData) -> GpsTime {
                 .as_secs_f64();
             let gps_secs = unix_secs - 315_964_800.0 + 18.0;
             let week = (gps_secs / GpsTime::SECS_PER_WEEK) as i32;
-            let sec  = gps_secs % GpsTime::SECS_PER_WEEK;
+            let sec = gps_secs % GpsTime::SECS_PER_WEEK;
             // If the RINEX file has a specific epoch, use it instead of now.
             let rinex_time = best_rinex_time(nav);
-            if rinex_time.week > 0 { rinex_time } else { GpsTime { week, sec } }
+            if rinex_time.week > 0 {
+                rinex_time
+            } else {
+                GpsTime { week, sec }
+            }
         }
     }
 }
 
 /// Return the GPS time of the first valid satellite in the first ephemeris set.
 fn best_rinex_time(nav: &NavData) -> GpsTime {
-    nav.eph.first()
+    nav.eph
+        .first()
         .and_then(|set| set.iter().find(|e| e.valid).map(|e| e.toe))
         .unwrap_or_default()
 }
 
 /// Select the ephemeris set whose reference time is closest to `g0`.
 fn best_eph_set(nav: &NavData, g0: GpsTime) -> usize {
-    nav.eph.iter().enumerate()
+    nav.eph
+        .iter()
+        .enumerate()
         .min_by_key(|(_, set)| {
             set.iter()
                 .filter(|e| e.valid)

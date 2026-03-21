@@ -29,16 +29,25 @@ pub const GPS_SAMPLE_RATE_HZ: usize = 3_000_000;
     reason = "lat/lon/alt cannot be bundled into SimSettings without polluting the dynamic-mode path"
 )]
 pub fn run_static_loop(
-    rinex_path:    &Path,
-    lat:           f64,
-    lon:           f64,
-    alt:           f64,
+    rinex_path: &Path,
+    lat: f64,
+    lon: f64,
+    alt: f64,
     loop_duration: f64,
-    settings:      &SimSettings,
-    state:         &Arc<Mutex<SimState>>,
-    stop:          &Arc<AtomicBool>,
+    settings: &SimSettings,
+    state: &Arc<Mutex<SimState>>,
+    stop: &Arc<AtomicBool>,
 ) {
-    run_static_loop_native(rinex_path, lat, lon, alt, loop_duration, settings, state, stop);
+    run_static_loop_native(
+        rinex_path,
+        lat,
+        lon,
+        alt,
+        loop_duration,
+        settings,
+        state,
+        stop,
+    );
 }
 
 /// Entry point for the interactive simulator.
@@ -52,13 +61,13 @@ pub fn run_static_loop(
 )]
 pub fn run_interactive(
     rinex_path: &Path,
-    lat:        f64,
-    lon:        f64,
-    alt:        f64,
-    settings:   &SimSettings,
-    state:      &Arc<Mutex<SimState>>,
-    stop:       &Arc<AtomicBool>,
-    istate:     Arc<std::sync::Mutex<crate::gps_sim::InteractiveState>>,
+    lat: f64,
+    lon: f64,
+    alt: f64,
+    settings: &SimSettings,
+    state: &Arc<Mutex<SimState>>,
+    stop: &Arc<AtomicBool>,
+    istate: Arc<std::sync::Mutex<crate::gps_sim::InteractiveState>>,
 ) {
     run_interactive_native(rinex_path, lat, lon, alt, settings, state, stop, istate);
 }
@@ -67,12 +76,12 @@ pub fn run_interactive(
 ///
 /// Runs the GPS L1 C/A signal generation for a single motion-file pass.
 pub fn run(
-    rinex_path:  &Path,
+    rinex_path: &Path,
     motion_path: &Path,
-    settings:    &SimSettings,
-    state:       &Arc<Mutex<SimState>>,
-    stop:        &Arc<AtomicBool>,
-    pause:       &Arc<AtomicBool>,
+    settings: &SimSettings,
+    state: &Arc<Mutex<SimState>>,
+    stop: &Arc<AtomicBool>,
+    pause: &Arc<AtomicBool>,
 ) {
     run_native(rinex_path, motion_path, settings, state, stop, pause);
 }
@@ -85,21 +94,21 @@ pub fn run(
 )]
 fn run_interactive_native(
     rinex_path: &Path,
-    lat:        f64,
-    lon:        f64,
-    alt:        f64,
-    settings:   &SimSettings,
-    state:      &Arc<Mutex<SimState>>,
-    stop:       &Arc<AtomicBool>,
-    istate:     Arc<std::sync::Mutex<crate::gps_sim::InteractiveState>>,
+    lat: f64,
+    lon: f64,
+    alt: f64,
+    settings: &SimSettings,
+    state: &Arc<Mutex<SimState>>,
+    stop: &Arc<AtomicBool>,
+    istate: Arc<std::sync::Mutex<crate::gps_sim::InteractiveState>>,
 ) {
     use crate::gps_sim::{Location, Simulator};
 
     let rinex_str = rinex_path.to_string_lossy().into_owned();
-    let output    = build_output(settings);
-    let state2    = Arc::clone(state);
-    let state3    = Arc::clone(state);
-    let stop2     = Arc::clone(stop);
+    let output = build_output(settings);
+    let state2 = Arc::clone(state);
+    let state3 = Arc::clone(state);
+    let stop2 = Arc::clone(stop);
 
     let mut builder = Simulator::builder()
         .rinex(rinex_str)
@@ -131,11 +140,14 @@ fn run_interactive_native(
     let result = builder.build().and_then(|sim| sim.run());
 
     let (final_status, error_msg) = finish_status(result, stop);
-    #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; no recovery")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "mutex poison means UI thread panicked; no recovery"
+    )]
     {
         let mut s = state3.lock().unwrap();
         s.status = final_status;
-        s.error  = error_msg;
+        s.error = error_msg;
     }
 
     // Ensure the stop flag is set so the UI knows we finished.
@@ -149,27 +161,27 @@ fn run_interactive_native(
     reason = "mirrors the public function signature"
 )]
 fn run_static_loop_native(
-    rinex_path:    &Path,
-    lat:           f64,
-    lon:           f64,
-    alt:           f64,
+    rinex_path: &Path,
+    lat: f64,
+    lon: f64,
+    alt: f64,
     loop_duration: f64,
-    settings:      &SimSettings,
-    state:         &Arc<Mutex<SimState>>,
-    stop:          &Arc<AtomicBool>,
+    settings: &SimSettings,
+    state: &Arc<Mutex<SimState>>,
+    stop: &Arc<AtomicBool>,
 ) {
     use crate::gps_sim::{Location, Simulator};
 
     let rinex_str = rinex_path.to_string_lossy().into_owned();
-    let output    = build_output(settings);
-    let duration  = loop_duration.max(1.0) as u32;
+    let output = build_output(settings);
+    let duration = loop_duration.max(1.0) as u32;
 
     let mut loop_count = 0usize;
 
     while !stop.load(Ordering::Relaxed) {
         let state2 = Arc::clone(state);
         let state3 = Arc::clone(state);
-        let stop2  = Arc::clone(stop);
+        let stop2 = Arc::clone(stop);
 
         let builder = Simulator::builder()
             .rinex(rinex_str.clone())
@@ -203,12 +215,15 @@ fn run_static_loop_native(
         // Increment loop count and update state.
         loop_count += 1;
         let (final_status, error_msg) = finish_status(result, stop);
-        #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; no recovery")]
+        #[expect(
+            clippy::unwrap_used,
+            reason = "mutex poison means UI thread panicked; no recovery"
+        )]
         {
             let mut s = state3.lock().unwrap();
             s.loop_count = loop_count;
-            s.status     = final_status.clone();
-            s.error      = error_msg;
+            s.status = final_status.clone();
+            s.error = error_msg;
         }
 
         if final_status != SimStatus::Done {
@@ -223,22 +238,22 @@ fn run_static_loop_native(
 }
 
 fn run_native(
-    rinex_path:  &Path,
+    rinex_path: &Path,
     motion_path: &Path,
-    settings:    &SimSettings,
-    state:       &Arc<Mutex<SimState>>,
-    stop:        &Arc<AtomicBool>,
-    pause:       &Arc<AtomicBool>,
+    settings: &SimSettings,
+    state: &Arc<Mutex<SimState>>,
+    stop: &Arc<AtomicBool>,
+    pause: &Arc<AtomicBool>,
 ) {
     use crate::gps_sim::Simulator;
 
-    let rinex_str  = rinex_path.to_string_lossy().into_owned();
+    let rinex_str = rinex_path.to_string_lossy().into_owned();
     let motion_str = motion_path.to_string_lossy().into_owned();
-    let output     = build_output(settings);
+    let output = build_output(settings);
 
     let state2 = Arc::clone(state);
     let state3 = Arc::clone(state);
-    let stop2  = Arc::clone(stop);
+    let stop2 = Arc::clone(stop);
 
     let builder = Simulator::builder()
         .rinex(rinex_str)
@@ -270,23 +285,26 @@ fn run_native(
     let result = builder.build().and_then(|sim| sim.run());
 
     let (final_status, error_msg) = finish_status(result, stop);
-    #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; no recovery")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "mutex poison means UI thread panicked; no recovery"
+    )]
     {
         let mut s = state3.lock().unwrap();
         s.status = final_status;
-        s.error  = error_msg;
+        s.error = error_msg;
     }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn build_output(settings: &SimSettings) -> crate::gps_sim::SdrOutput {
-    use crate::gps_sim::SdrOutput;
     use super::state::SimOutputType;
+    use crate::gps_sim::SdrOutput;
     match &settings.output_type {
         SimOutputType::HackRf => SdrOutput::HackRf {
             gain_db: i32::from(settings.txvga_gain),
-            amp:     settings.amp_enable,
+            amp: settings.amp_enable,
         },
         SimOutputType::IqFile => SdrOutput::IqFile {
             path: settings.iq_file_path.clone(),
@@ -305,7 +323,7 @@ fn build_output(settings: &SimSettings) -> crate::gps_sim::SdrOutput {
 fn handle_event(
     event: &crate::gps_sim::SimEvent,
     state: &Arc<Mutex<SimState>>,
-    stop:  &Arc<AtomicBool>,
+    stop: &Arc<AtomicBool>,
 ) {
     use crate::gps_sim::SimEvent;
 
@@ -313,27 +331,43 @@ fn handle_event(
         return;
     }
 
-    #[expect(clippy::unwrap_used, reason = "mutex poison means UI thread panicked; no recovery")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "mutex poison means UI thread panicked; no recovery"
+    )]
     let mut s = state.lock().unwrap();
 
     match event {
-        SimEvent::Progress { current_step, total_steps, bytes_sent } => {
+        SimEvent::Progress {
+            current_step,
+            total_steps,
+            bytes_sent,
+        } => {
             s.current_step = *current_step;
-            s.total_steps  = *total_steps;
-            s.bytes_sent   = *bytes_sent;
+            s.total_steps = *total_steps;
+            s.bytes_sent = *bytes_sent;
         }
         SimEvent::Done => {
             s.status = SimStatus::Done;
         }
-        SimEvent::Position { lat_deg, lon_deg, height_m } => {
-            s.lat_deg  = *lat_deg;
-            s.lon_deg  = *lon_deg;
+        SimEvent::Position {
+            lat_deg,
+            lon_deg,
+            height_m,
+        } => {
+            s.lat_deg = *lat_deg;
+            s.lon_deg = *lon_deg;
             s.height_m = *height_m;
             s.satellites.clear();
         }
-        SimEvent::Satellite { prn, az_deg, el_deg, .. } => {
+        SimEvent::Satellite {
+            prn,
+            az_deg,
+            el_deg,
+            ..
+        } => {
             s.satellites.push(crate::simulator::state::SimSatInfo {
-                prn:    *prn,
+                prn: *prn,
                 az_deg: *az_deg,
                 el_deg: *el_deg,
             });
@@ -345,13 +379,13 @@ fn handle_event(
 /// Determine the final `SimStatus` and optional error message from the result and stop flag.
 fn finish_status(
     result: Result<(), crate::gps_sim::SimError>,
-    stop:   &Arc<AtomicBool>,
+    stop: &Arc<AtomicBool>,
 ) -> (SimStatus, Option<String>) {
     match result {
         Ok(()) if stop.load(Ordering::Relaxed) => (SimStatus::Stopped, None),
-        Ok(())                                  => (SimStatus::Done, None),
-        Err(crate::gps_sim::SimError::Aborted)  => (SimStatus::Stopped, None),
-        Err(e)                                   => (SimStatus::Error, Some(e.to_string())),
+        Ok(()) => (SimStatus::Done, None),
+        Err(crate::gps_sim::SimError::Aborted) => (SimStatus::Stopped, None),
+        Err(e) => (SimStatus::Error, Some(e.to_string())),
     }
 }
 
@@ -370,19 +404,31 @@ fn parse_start_time(s: &Option<String>) -> crate::gps_sim::StartTime {
         return StartTime::Now;
     }
     // Expected format: "YYYY/MM/DD,hh:mm:ss"
-    let Some((date_part, time_part)) = s.split_once(',') else { return StartTime::Now; };
+    let Some((date_part, time_part)) = s.split_once(',') else {
+        return StartTime::Now;
+    };
     let mut d = date_part.splitn(3, '/');
     let (Some(year), Some(month), Some(day)) = (
         d.next().and_then(|v| v.parse::<i32>().ok()),
         d.next().and_then(|v| v.parse::<u8>().ok()),
         d.next().and_then(|v| v.parse::<u8>().ok()),
-    ) else { return StartTime::Now; };
+    ) else {
+        return StartTime::Now;
+    };
     let mut t = time_part.splitn(3, ':');
     let (Some(hour), Some(min), Some(sec)) = (
         t.next().and_then(|v| v.parse::<u8>().ok()),
         t.next().and_then(|v| v.parse::<u8>().ok()),
         t.next().and_then(|v| v.parse::<f64>().ok()),
-    ) else { return StartTime::Now; };
-    StartTime::DateTime(UtcDate { year, month, day, hour, min, sec })
+    ) else {
+        return StartTime::Now;
+    };
+    StartTime::DateTime(UtcDate {
+        year,
+        month,
+        day,
+        hour,
+        min,
+        sec,
+    })
 }
-

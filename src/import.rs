@@ -12,8 +12,8 @@ use std::path::Path;
 /// Returns a human-readable error string if the file cannot be read, the
 /// extension is unsupported, or the content cannot be parsed.
 pub(crate) fn load_route_file(path: &Path) -> Result<Vec<[f64; 2]>, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Read '{}': {e}", path.display()))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("Read '{}': {e}", path.display()))?;
 
     let ext = path
         .extension()
@@ -35,8 +35,7 @@ pub(crate) fn load_route_file(path: &Path) -> Result<Vec<[f64; 2]>, String> {
 /// Track points (`trkpt`) are preferred; route points (`rtept`) are used when
 /// no track is present; standalone waypoints (`wpt`) serve as a last resort.
 fn parse_gpx(content: &str) -> Result<Vec<[f64; 2]>, String> {
-    let doc = roxmltree::Document::parse(content)
-        .map_err(|e| format!("GPX parse error: {e}"))?;
+    let doc = roxmltree::Document::parse(content).map_err(|e| format!("GPX parse error: {e}"))?;
 
     let mut track_pts: Vec<[f64; 2]> = Vec::new();
     let mut route_pts: Vec<[f64; 2]> = Vec::new();
@@ -91,8 +90,7 @@ fn gpx_point(node: &roxmltree::Node<'_, '_>) -> Option<[f64; 2]> {
 ///
 /// `LineString` coordinates are preferred over individual `Point` coordinates.
 fn parse_kml(content: &str) -> Result<Vec<[f64; 2]>, String> {
-    let doc = roxmltree::Document::parse(content)
-        .map_err(|e| format!("KML parse error: {e}"))?;
+    let doc = roxmltree::Document::parse(content).map_err(|e| format!("KML parse error: {e}"))?;
 
     let mut line_pts: Vec<[f64; 2]> = Vec::new();
     let mut point_pts: Vec<[f64; 2]> = Vec::new();

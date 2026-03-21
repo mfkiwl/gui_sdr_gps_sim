@@ -6,7 +6,10 @@ use geo::{Distance as _, Geodesic, InterpolatePoint as _, Point};
 ///
 /// Each segment spans two consecutive route coordinates. Transmit points
 /// are evenly spaced along the geodesic at 0.1-second intervals.
-#[expect(dead_code, reason = "fields available for future features (logging, visualisation)")]
+#[expect(
+    dead_code,
+    reason = "fields available for future features (logging, visualisation)"
+)]
 #[derive(Debug, Clone)]
 pub struct Segment {
     pub segment_id: i32,
@@ -36,7 +39,10 @@ pub struct Segment {
 /// effective speed to be much higher than configured.
 ///
 /// Returns an empty `Vec` when fewer than two coordinate points are supplied.
-#[expect(clippy::indexing_slicing, reason = "loop bounds guarantee all accesses are within range")]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "loop bounds guarantee all accesses are within range"
+)]
 pub fn segmentize(lon: &[f64], lat: &[f64], ele: &[f64], segment_velocity: f64) -> Vec<Segment> {
     if lon.len() < 2 || lat.len() < 2 || ele.len() < 2 {
         return Vec::new();
@@ -53,7 +59,7 @@ pub fn segmentize(lon: &[f64], lat: &[f64], ele: &[f64], segment_velocity: f64) 
 
     for i in 0..lon.len() - 1 {
         let start = Point::new(lon[i], lat[i]);
-        let end   = Point::new(lon[i + 1], lat[i + 1]);
+        let end = Point::new(lon[i + 1], lat[i + 1]);
         let avg_elevation = f64::midpoint(ele[i], ele[i + 1]);
         let distance = Geodesic.distance(start, end);
 

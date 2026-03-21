@@ -6,7 +6,10 @@
 //! The returned value is **always positive** (adding it to the geometric range
 //! increases the pseudorange, as the ionosphere slows the signal).
 
-use super::types::{IonoUtc, GpsTime, consts::{GPS_PI, SPEED_OF_LIGHT}};
+use super::types::{
+    GpsTime, IonoUtc,
+    consts::{GPS_PI, SPEED_OF_LIGHT},
+};
 
 /// Compute ionospheric path delay in **metres**.
 ///
@@ -23,9 +26,9 @@ pub fn klobuchar_delay(iono: &IonoUtc, t: GpsTime, llh: [f64; 3], azel: [f64; 2]
     }
 
     // Elevation and user position in semi-circles (IS-GPS-200 convention).
-    let e = azel[1] / GPS_PI;        // elevation in semi-circles [0, 0.5]
-    let phi_u = llh[0] / GPS_PI;     // user latitude in semi-circles
-    let lam_u = llh[1] / GPS_PI;     // user longitude in semi-circles
+    let e = azel[1] / GPS_PI; // elevation in semi-circles [0, 0.5]
+    let phi_u = llh[0] / GPS_PI; // user latitude in semi-circles
+    let lam_u = llh[1] / GPS_PI; // user longitude in semi-circles
 
     // ── Earth-centred angle to ionospheric pierce point ───────────────────────
     // ψ (semi-circles): angle between receiver and pierce point at 350 km altitude.
@@ -44,13 +47,15 @@ pub fn klobuchar_delay(iono: &IonoUtc, t: GpsTime, llh: [f64; 3], azel: [f64; 2]
     let amp = {
         let a = &iono.alpha;
         a[0] + phi_m * (a[1] + phi_m * (a[2] + phi_m * a[3]))
-    }.max(0.0);
+    }
+    .max(0.0);
 
     // ── Period of cosine variation ────────────────────────────────────────────
     let per = {
         let b = &iono.beta;
         b[0] + phi_m * (b[1] + phi_m * (b[2] + phi_m * b[3]))
-    }.max(72_000.0);
+    }
+    .max(72_000.0);
 
     // ── Obliquity factor (slant/vertical ratio) ───────────────────────────────
     let f = 1.0 + 16.0 * (0.53 - e).powi(3);
@@ -78,8 +83,8 @@ pub fn klobuchar_delay(iono: &IonoUtc, t: GpsTime, llh: [f64; 3], azel: [f64; 2]
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::IonoUtc;
+    use super::*;
 
     /// Typical mid-latitude test case: delay should be a few metres.
     #[test]
@@ -87,11 +92,14 @@ mod tests {
         let iono = IonoUtc {
             valid: true,
             alpha: [1.118e-8, 1.490e-8, -5.960e-8, -1.192e-7],
-            beta:  [9.011e4,  6.554e4, -1.311e5,  -1.311e5],
+            beta: [9.011e4, 6.554e4, -1.311e5, -1.311e5],
             ..Default::default()
         };
         // ~35 °N, 5 °E, ~14:00 local solar time so it should be near the daytime peak.
-        let t = GpsTime { week: 2300, sec: 388_800.0 };
+        let t = GpsTime {
+            week: 2300,
+            sec: 388_800.0,
+        };
         let llh = [0.6109, 0.0873, 100.0];
         let azel = [0.0, 1.0]; // north, ~57° elevation
         let delay = klobuchar_delay(&iono, t, llh, azel);
@@ -105,21 +113,30 @@ mod tests {
         let iono = IonoUtc {
             valid: true,
             alpha: [1.118e-8, 0.0, 0.0, 0.0],
-            beta:  [9.011e4,  0.0, 0.0, 0.0],
+            beta: [9.011e4, 0.0, 0.0, 0.0],
             ..Default::default()
         };
         // 02:00 local solar time (far from the noon cosine peak).
-        let t = GpsTime { week: 2300, sec: 7_200.0 };
+        let t = GpsTime {
+            week: 2300,
+            sec: 7_200.0,
+        };
         let llh = [0.0, 0.0, 0.0];
         let azel = [0.0, GPS_PI / 4.0]; // 45° elevation
         let delay = klobuchar_delay(&iono, t, llh, azel);
         // Night-time delay: F * 5e-9 * c ≈ 1.5 * 1.5 m ≈ 2.25 m at 45° elev.
-        assert!(delay > 0.5 && delay < 5.0, "night delay out of range: {delay} m");
+        assert!(
+            delay > 0.5 && delay < 5.0,
+            "night delay out of range: {delay} m"
+        );
     }
 
     #[test]
     fn klobuchar_zero_when_invalid() {
-        let iono = IonoUtc { valid: false, ..Default::default() };
+        let iono = IonoUtc {
+            valid: false,
+            ..Default::default()
+        };
         let delay = klobuchar_delay(&iono, GpsTime::default(), [0.0; 3], [0.0, 1.0]);
         assert_eq!(delay, 0.0);
     }

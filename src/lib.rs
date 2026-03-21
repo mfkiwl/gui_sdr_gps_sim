@@ -4,8 +4,8 @@ pub mod gps_sim;
 
 mod app;
 mod geo;
-mod library;
 mod import;
+mod library;
 mod map_plugin;
 mod paths;
 mod rinex;

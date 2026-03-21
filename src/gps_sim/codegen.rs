@@ -25,10 +25,8 @@
 ///
 /// `ca[i] = g1[i] XOR g2[(i + 1023 - delay) % 1023]`
 const G2_DELAYS: [usize; 32] = [
-    5, 6, 7, 8, 17, 18, 139, 140, 141, 251,
-    252, 254, 255, 256, 257, 258, 469, 470, 471, 472,
-    473, 474, 509, 512, 513, 514, 515, 516, 859, 860,
-    861, 862,
+    5, 6, 7, 8, 17, 18, 139, 140, 141, 251, 252, 254, 255, 256, 257, 258, 469, 470, 471, 472, 473,
+    474, 509, 512, 513, 514, 515, 516, 859, 860, 861, 862,
 ];
 
 /// Generate the C/A spreading code for `prn` (1-based, 1–32).
@@ -42,7 +40,10 @@ const G2_DELAYS: [usize; 32] = [
 ///
 /// # Panics
 /// Panics if `prn` is not in the range 1–32.
-#[expect(clippy::indexing_slicing, reason = "G2_DELAYS indexed by (prn-1) which is 0..31; g1/g2 regs are [u8;10] indexed at known positions; g1_seq/g2_seq/code are [;1023] indexed by i<1023")]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "G2_DELAYS indexed by (prn-1) which is 0..31; g1/g2 regs are [u8;10] indexed at known positions; g1_seq/g2_seq/code are [;1023] indexed by i<1023"
+)]
 pub fn generate(prn: u8) -> [i8; 1023] {
     assert!((1..=32).contains(&prn), "PRN must be 1–32, got {prn}");
     let delay = G2_DELAYS[(prn - 1) as usize];
@@ -84,7 +85,10 @@ pub fn generate(prn: u8) -> [i8; 1023] {
 ///
 /// Mapping: `0 → −1`, `1 → +1`.  The bipolar form is used directly in the
 /// IQ accumulation loop where the chip is multiplied by the carrier phasor.
-#[expect(clippy::indexing_slicing, reason = "from_fn guarantees i<1023; code is [i8;1023]")]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "from_fn guarantees i<1023; code is [i8;1023]"
+)]
 pub fn to_bipolar(code: &[i8; 1023]) -> [i8; 1023] {
     std::array::from_fn(|i| 2 * code[i] - 1)
 }
@@ -106,8 +110,10 @@ mod tests {
     fn code_values_binary() {
         for prn in 1u8..=32 {
             let code = generate(prn);
-            assert!(code.iter().all(|&b| b == 0 || b == 1),
-                "PRN {prn} has non-binary chip values");
+            assert!(
+                code.iter().all(|&b| b == 0 || b == 1),
+                "PRN {prn} has non-binary chip values"
+            );
         }
     }
 
@@ -116,7 +122,9 @@ mod tests {
     #[test]
     fn prn1_first_chips() {
         let code = generate(1);
-        let expected: &[i8] = &[1,1,0,0,1,0,0,0,0,0,1,1,1,0,0,1,0,1,0,0,1,0,0];
+        let expected: &[i8] = &[
+            1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0,
+        ];
         assert_eq!(&code[..23], expected, "PRN 1 chip sequence mismatch");
     }
 
@@ -128,27 +136,37 @@ mod tests {
         for prn in 1u8..=32 {
             let code = generate(prn);
             let ones = code.iter().filter(|&&b| b == 1).count();
-            assert!(ones == 511 || ones == 512,
-                "PRN {prn}: expected 511 or 512 ones, got {ones}");
+            assert!(
+                ones == 511 || ones == 512,
+                "PRN {prn}: expected 511 or 512 ones, got {ones}"
+            );
         }
     }
 
     /// Different PRNs must produce different codes.
     #[test]
-    #[expect(clippy::indexing_slicing, reason = "i and j are bounded by codes.len() which is 32")]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "i and j are bounded by codes.len() which is 32"
+    )]
     fn codes_are_unique() {
         let codes: Vec<[i8; 1023]> = (1u8..=32).map(generate).collect();
         for i in 0..codes.len() {
             for j in (i + 1)..codes.len() {
-                assert_ne!(codes[i], codes[j],
-                    "PRN {} and PRN {} have identical codes", i + 1, j + 1);
+                assert_ne!(
+                    codes[i],
+                    codes[j],
+                    "PRN {} and PRN {} have identical codes",
+                    i + 1,
+                    j + 1
+                );
             }
         }
     }
 
     #[test]
     fn bipolar_conversion() {
-        let code    = generate(1);
+        let code = generate(1);
         let bipolar = to_bipolar(&code);
         assert!(bipolar.iter().all(|&b| b == -1 || b == 1));
         // PRN 1 has 512 ones → bipolar sum = 512 − 511 = +1.

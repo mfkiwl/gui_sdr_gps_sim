@@ -1,9 +1,6 @@
 //! Application state, initialisation, and eframe integration.
 
-use std::{
-    path::PathBuf,
-    sync::mpsc,
-};
+use std::{path::PathBuf, sync::mpsc};
 
 use crate::{
     geo::parse_coords,
@@ -326,7 +323,8 @@ pub struct MyApp {
 
     /// Receives the result of a RINEX download for the interactive simulator (not persisted).
     #[serde(skip)]
-    pub sim_interactive_rinex_download: Option<std::sync::mpsc::Receiver<Result<std::path::PathBuf, String>>>,
+    pub sim_interactive_rinex_download:
+        Option<std::sync::mpsc::Receiver<Result<std::path::PathBuf, String>>>,
 
     /// Human-readable error from the last failed RINEX download for the interactive simulator (not persisted).
     #[serde(skip)]
@@ -586,9 +584,7 @@ impl Default for MyApp {
             sim_static_state: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::simulator::SimState::default(),
             )),
-            sim_static_stop_flag: std::sync::Arc::new(
-                std::sync::atomic::AtomicBool::new(false),
-            ),
+            sim_static_stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             sim_static_thread: None,
             sim_static_rinex_download: None,
             sim_static_rinex_dl_error: None,
@@ -602,9 +598,9 @@ impl Default for MyApp {
             sim_interactive_state: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::simulator::SimState::default(),
             )),
-            sim_interactive_stop_flag: std::sync::Arc::new(
-                std::sync::atomic::AtomicBool::new(false),
-            ),
+            sim_interactive_stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                false,
+            )),
             sim_interactive_thread: None,
             sim_interactive_istate: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::gps_sim::InteractiveState::default(),
@@ -740,8 +736,7 @@ impl MyApp {
         self.status = AppStatus::Working;
         let tx = self.result_tx.clone();
         self.rt.spawn(async move {
-            let result =
-                run_pipeline(route_points, velocity, route_name, api_key, profile).await;
+            let result = run_pipeline(route_points, velocity, route_name, api_key, profile).await;
             tx.send(result).ok();
         });
     }
@@ -752,8 +747,7 @@ impl MyApp {
     /// writes it to `umf/drawn_route.geojson`, then runs the segmentation pipeline.
     fn generate_from_drawn_route(&mut self, route_name: String, velocity: f64) {
         if self.draw_route_points.len() < 2 {
-            self.status =
-                AppStatus::Error("Draw at least 2 points on the map first.".to_owned());
+            self.status = AppStatus::Error("Draw at least 2 points on the map first.".to_owned());
             return;
         }
 
@@ -794,8 +788,7 @@ impl MyApp {
         self.status = AppStatus::Working;
         let tx = self.result_tx.clone();
         self.rt.spawn(async move {
-            let result =
-                crate::route::run_pipeline_from_geojson(path, velocity, route_name).await;
+            let result = crate::route::run_pipeline_from_geojson(path, velocity, route_name).await;
             tx.send(result).ok();
         });
     }
@@ -809,8 +802,7 @@ impl MyApp {
         self.status = AppStatus::Working;
         let tx = self.result_tx.clone();
         self.rt.spawn(async move {
-            let result =
-                crate::route::run_pipeline_from_geojson(path, velocity, route_name).await;
+            let result = crate::route::run_pipeline_from_geojson(path, velocity, route_name).await;
             tx.send(result).ok();
         });
     }
@@ -852,8 +844,14 @@ impl MyApp {
             let Some(arr) = pt.as_array() else {
                 continue;
             };
-            let lon = arr.first().and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-            let lat = arr.get(1).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            let lon = arr
+                .first()
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0);
+            let lat = arr
+                .get(1)
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0);
             self.sim_lib_route_points.push(walkers::lat_lon(lat, lon));
         }
         if let Some(first) = self.sim_lib_route_points.first() {
@@ -902,8 +900,14 @@ impl MyApp {
 
         for pt in coords {
             let Some(arr) = pt.as_array() else { continue };
-            let lon = arr.first().and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-            let lat = arr.get(1).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            let lon = arr
+                .first()
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0);
+            let lat = arr
+                .get(1)
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0);
             self.lib_route_points.push(walkers::lat_lon(lat, lon));
         }
 
@@ -998,8 +1002,10 @@ impl MyApp {
         }
         self.editing_index = Some(index);
         self.new_waypoint = self.waypoints[index].clone();
-        self.new_waypoint_coords =
-            format!("{}, {}", self.waypoints[index].lat, self.waypoints[index].lon);
+        self.new_waypoint_coords = format!(
+            "{}, {}",
+            self.waypoints[index].lat, self.waypoints[index].lon
+        );
         self.new_waypoint_coord_error = None;
     }
 
@@ -1139,12 +1145,12 @@ impl MyApp {
             *self.sim_interactive_istate.lock().unwrap() =
                 crate::gps_sim::InteractiveState::default();
         }
-        self.sim_interactive_stop_flag.store(false, Ordering::Relaxed);
+        self.sim_interactive_stop_flag
+            .store(false, Ordering::Relaxed);
 
-        let rinex_path = self
-            .sim_interactive_rinex_path
-            .clone()
-            .expect("start_interactive_simulation requires sim_interactive_rinex_path; caller must check");
+        let rinex_path = self.sim_interactive_rinex_path.clone().expect(
+            "start_interactive_simulation requires sim_interactive_rinex_path; caller must check",
+        );
 
         let lat: f64 = self.sim_interactive_lat.trim().parse().unwrap_or(0.0);
         let lon: f64 = self.sim_interactive_lon.trim().parse().unwrap_or(0.0);
@@ -1187,8 +1193,8 @@ impl MyApp {
             tcp_port: self.sim_tcp_port,
         };
 
-        let state  = std::sync::Arc::clone(&self.sim_interactive_state);
-        let stop   = std::sync::Arc::clone(&self.sim_interactive_stop_flag);
+        let state = std::sync::Arc::clone(&self.sim_interactive_state);
+        let stop = std::sync::Arc::clone(&self.sim_interactive_stop_flag);
         let istate = std::sync::Arc::clone(&self.sim_interactive_istate);
 
         self.sim_interactive_thread = Some(std::thread::spawn(move || {
@@ -1237,8 +1243,14 @@ impl MyApp {
             let Some(arr) = pt.as_array() else {
                 continue;
             };
-            let lon = arr.first().and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-            let lat = arr.get(1).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            let lon = arr
+                .first()
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0);
+            let lat = arr
+                .get(1)
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0);
             self.lib_edit_points.push(walkers::lat_lon(lat, lon));
         }
         if let Some(first) = self.lib_edit_points.first() {
@@ -1332,7 +1344,9 @@ impl MyApp {
             ionospheric_disable: self.sim_ionospheric_disable,
             fixed_gain: self.sim_fixed_gain_enable.then_some(self.sim_fixed_gain),
             center_frequency: self.sim_center_freq,
-            baseband_filter: self.sim_baseband_filter_enable.then_some(self.sim_baseband_filter),
+            baseband_filter: self
+                .sim_baseband_filter_enable
+                .then_some(self.sim_baseband_filter),
             leap: self.sim_leap_enable.then_some((
                 self.sim_leap_week,
                 self.sim_leap_day,
@@ -1354,7 +1368,7 @@ impl MyApp {
             tcp_port: self.sim_tcp_port,
         };
         let state = std::sync::Arc::clone(&self.sim_state);
-        let stop  = std::sync::Arc::clone(&self.sim_stop_flag);
+        let stop = std::sync::Arc::clone(&self.sim_stop_flag);
         let pause = std::sync::Arc::clone(&self.sim_pause_flag);
         // Reset pause flag when starting a new simulation.
         pause.store(false, std::sync::atomic::Ordering::Relaxed);

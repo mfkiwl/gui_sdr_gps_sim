@@ -37,18 +37,10 @@ fn add_map_zoom_controls(
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_min_width(28.0);
-                if ui
-                    .button(" + ")
-                    .on_hover_text("Zoom in")
-                    .clicked()
-                {
+                if ui.button(" + ").on_hover_text("Zoom in").clicked() {
                     map_memory.zoom_in().unwrap_or_default();
                 }
-                if ui
-                    .button(" − ")
-                    .on_hover_text("Zoom out")
-                    .clicked()
-                {
+                if ui.button(" − ").on_hover_text("Zoom out").clicked() {
                     map_memory.zoom_out().unwrap_or_default();
                 }
             });
@@ -501,7 +493,10 @@ fn nav_image_active_with_tooltip(
     if active {
         let accent_color = egui::Color32::from_rgb(100, 160, 255);
         egui::Frame::new()
-            .inner_margin(egui::Margin { left: 4, ..Default::default() })
+            .inner_margin(egui::Margin {
+                left: 4,
+                ..Default::default()
+            })
             .stroke(egui::Stroke::NONE)
             .show(ui, |ui| {
                 let resp = ui.add(
@@ -559,109 +554,111 @@ fn show_central_panel(app: &mut MyApp, ctx: &egui::Context) {
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-        match current_mode {
-            AppPage::Home => show_home_page(ui),
-            AppPage::SdrGpsSimulator => show_sdr_gps_page(app, ui, ctx),
-            AppPage::CreateUmfRoute => {
-                // Collect deferred mutations to apply after the UI is rendered,
-                // avoiding conflicts with borrows held inside the egui closures.
-                let actions = show_create_route_page(app, ui);
-                if let Some(i) = actions.to_remove {
-                    app.viapoints.remove(i);
-                }
-                if actions.add_via {
-                    app.viapoints.push(WaypointEntry::default());
-                }
-                if actions.do_generate {
-                    app.generate();
-                }
-                if let Some(pos) = actions.set_start {
-                    app.start.text = pos;
-                }
-                if let Some(pos) = actions.set_end {
-                    app.end.text = pos;
-                }
-                if let Some(pos) = actions.add_via_with_pos {
-                    app.viapoints.push(WaypointEntry { text: pos });
-                }
-                if actions.open_geojson_dialog {
-                    app.route_geojson_dialog = Some(crate::simulator::open_file_dialog(
-                        "Select GeoJSON Route File",
-                        &[("GeoJSON", &["geojson", "json"])],
-                        crate::paths::umf_dir().ok(),
-                    ));
-                }
-                if actions.draw_undo_last {
-                    app.draw_route_points.pop();
-                }
-                if actions.draw_clear {
-                    app.draw_route_points.clear();
-                    app.draw_route_status = None;
-                }
-                if actions.draw_open_import_dialog {
-                    app.draw_import_dialog = Some(crate::simulator::open_file_dialog(
-                        "Import GPX or KML Route File",
-                        &[("Route files", &["gpx", "kml"])],
-                        None,
-                    ));
-                }
-            }
-            AppPage::ManageWaypoints => {
-                let actions = show_waypoints_page(app, ui);
-                if let Some(i) = actions.edit_index {
-                    app.wp_selected_row = Some(i);
-                    if let Some(wp) = app.waypoints.get(i) {
-                        app.wp_map_memory.center_at(walkers::lat_lon(wp.lat, wp.lon));
+                match current_mode {
+                    AppPage::Home => show_home_page(ui),
+                    AppPage::SdrGpsSimulator => show_sdr_gps_page(app, ui, ctx),
+                    AppPage::CreateUmfRoute => {
+                        // Collect deferred mutations to apply after the UI is rendered,
+                        // avoiding conflicts with borrows held inside the egui closures.
+                        let actions = show_create_route_page(app, ui);
+                        if let Some(i) = actions.to_remove {
+                            app.viapoints.remove(i);
+                        }
+                        if actions.add_via {
+                            app.viapoints.push(WaypointEntry::default());
+                        }
+                        if actions.do_generate {
+                            app.generate();
+                        }
+                        if let Some(pos) = actions.set_start {
+                            app.start.text = pos;
+                        }
+                        if let Some(pos) = actions.set_end {
+                            app.end.text = pos;
+                        }
+                        if let Some(pos) = actions.add_via_with_pos {
+                            app.viapoints.push(WaypointEntry { text: pos });
+                        }
+                        if actions.open_geojson_dialog {
+                            app.route_geojson_dialog = Some(crate::simulator::open_file_dialog(
+                                "Select GeoJSON Route File",
+                                &[("GeoJSON", &["geojson", "json"])],
+                                crate::paths::umf_dir().ok(),
+                            ));
+                        }
+                        if actions.draw_undo_last {
+                            app.draw_route_points.pop();
+                        }
+                        if actions.draw_clear {
+                            app.draw_route_points.clear();
+                            app.draw_route_status = None;
+                        }
+                        if actions.draw_open_import_dialog {
+                            app.draw_import_dialog = Some(crate::simulator::open_file_dialog(
+                                "Import GPX or KML Route File",
+                                &[("Route files", &["gpx", "kml"])],
+                                None,
+                            ));
+                        }
                     }
-                    app.edit_waypoint(i);
-                }
-                if let Some(i) = actions.delete_index {
-                    if app.wp_selected_row == Some(i) {
-                        app.wp_selected_row = None;
+                    AppPage::ManageWaypoints => {
+                        let actions = show_waypoints_page(app, ui);
+                        if let Some(i) = actions.edit_index {
+                            app.wp_selected_row = Some(i);
+                            if let Some(wp) = app.waypoints.get(i) {
+                                app.wp_map_memory
+                                    .center_at(walkers::lat_lon(wp.lat, wp.lon));
+                            }
+                            app.edit_waypoint(i);
+                        }
+                        if let Some(i) = actions.delete_index {
+                            if app.wp_selected_row == Some(i) {
+                                app.wp_selected_row = None;
+                            }
+                            app.delete_waypoint(i);
+                        }
+                        if let Some(i) = actions.select_index {
+                            app.wp_selected_row = Some(i);
+                            if let Some(wp) = app.waypoints.get(i) {
+                                app.wp_map_memory
+                                    .center_at(walkers::lat_lon(wp.lat, wp.lon));
+                            }
+                        }
+                        if actions.save {
+                            app.save_waypoints();
+                        }
                     }
-                    app.delete_waypoint(i);
-                }
-                if let Some(i) = actions.select_index {
-                    app.wp_selected_row = Some(i);
-                    if let Some(wp) = app.waypoints.get(i) {
-                        app.wp_map_memory.center_at(walkers::lat_lon(wp.lat, wp.lon));
+                    AppPage::ManageUmfRoutes => {
+                        let actions = show_routes_page(app, ui);
+                        if let Some(i) = actions.select_row {
+                            app.library_selected_row = Some(i);
+                            if let Some(entry) = app.library.get(i) {
+                                let name = entry.name.clone();
+                                app.load_library_route(&name);
+                            }
+                        }
+                        if let Some(i) = actions.delete_row {
+                            app.delete_library_route(i);
+                            app.clear_and_rescan_library();
+                            // Clear selection/map if the deleted row was selected.
+                            if app.library_selected_row == Some(i) {
+                                app.library_selected_row = None;
+                                app.lib_route_points.clear();
+                            }
+                        }
+                        if let Some(i) = actions.edit_row {
+                            app.load_lib_edit_route(i);
+                        }
+                        if actions.done_editing {
+                            app.lib_edit_entry_idx = None;
+                        }
+                        if actions.open_in_draw {
+                            app.open_lib_edit_in_draw_route();
+                            app.current_mode = AppPage::CreateUmfRoute;
+                        }
                     }
                 }
-                if actions.save {
-                    app.save_waypoints();
-                }
-            }
-            AppPage::ManageUmfRoutes => {
-                let actions = show_routes_page(app, ui);
-                if let Some(i) = actions.select_row {
-                    app.library_selected_row = Some(i);
-                    if let Some(entry) = app.library.get(i) {
-                        let name = entry.name.clone();
-                        app.load_library_route(&name);
-                    }
-                }
-                if let Some(i) = actions.delete_row {
-                    app.delete_library_route(i);
-                    app.clear_and_rescan_library();
-                    // Clear selection/map if the deleted row was selected.
-                    if app.library_selected_row == Some(i) {
-                        app.library_selected_row = None;
-                        app.lib_route_points.clear();
-                    }
-                }
-                if let Some(i) = actions.edit_row {
-                    app.load_lib_edit_route(i);
-                }
-                if actions.done_editing {
-                    app.lib_edit_entry_idx = None;
-                }
-                if actions.open_in_draw {
-                    app.open_lib_edit_in_draw_route();
-                    app.current_mode = AppPage::CreateUmfRoute;
-                }
-            }
-        }
-        }); // ScrollArea
+            }); // ScrollArea
     });
 }
 
@@ -749,10 +746,10 @@ fn show_sdr_gps_page(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     ui.separator();
 
     match app.sim_tab {
-        SimTab::Dynamic      => show_sim_dynamic_tab(app, ui),
-        SimTab::Static       => show_sim_static_tab(app, ui),
-        SimTab::Interactive  => show_sim_interactive_tab(app, ui, ctx),
-        SimTab::Settings     => show_sim_settings_tab(app, ui),
+        SimTab::Dynamic => show_sim_dynamic_tab(app, ui),
+        SimTab::Static => show_sim_static_tab(app, ui),
+        SimTab::Interactive => show_sim_interactive_tab(app, ui, ctx),
+        SimTab::Settings => show_sim_settings_tab(app, ui),
     }
 }
 
@@ -803,7 +800,11 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                 {
                     open_browse = true;
                 }
-                let dl_label = if downloading { "⏳" } else { "⬇ Download Latest" };
+                let dl_label = if downloading {
+                    "⏳"
+                } else {
+                    "⬇ Download Latest"
+                };
                 if ui
                     .add_enabled(!downloading, egui::Button::new(dl_label))
                     .on_hover_text(crate::rinex::today_rinex_filename())
@@ -852,58 +853,78 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
 
     // ── Route library ─────────────────────────────────────────────────────────
     let running = app.sim_thread.is_some();
-    ui.add_enabled_ui(!running, |ui| ui.group(|ui| {
-        section_title(ui, "Route Library");
+    ui.add_enabled_ui(!running, |ui| {
+        ui.group(|ui| {
+            section_title(ui, "Route Library");
 
-        if app.library.is_empty() {
-            ui.label(egui::RichText::new("No routes in library. Go to Manage UMF Routes to scan.").weak());
-        } else {
-            let mut route_to_load: Option<usize> = None;
+            if app.library.is_empty() {
+                ui.label(
+                    egui::RichText::new("No routes in library. Go to Manage UMF Routes to scan.")
+                        .weak(),
+                );
+            } else {
+                let mut route_to_load: Option<usize> = None;
 
-            egui::ScrollArea::vertical()
-                .id_salt("sim_dyn_lib_scroll")
-                .max_height(160.0)
-                .show(ui, |ui| {
-                    egui_extras::TableBuilder::new(ui)
-                        .column(Column::initial(160.0).at_least(100.0)) // Name
-                        .column(Column::initial(90.0).at_least(70.0))   // Distance
-                        .column(Column::initial(90.0).at_least(70.0))   // Duration
-                        .column(Column::initial(90.0).at_least(70.0))   // Velocity
-                        .sense(egui::Sense::click())
-                        .resizable(true)
-                        .striped(true)
-                        .header(22.0, |mut row| {
-                            row.col(|ui| { ui.strong("Route Name"); });
-                            row.col(|ui| { ui.strong("Distance"); });
-                            row.col(|ui| { ui.strong("Duration"); });
-                            row.col(|ui| { ui.strong("Velocity"); });
-                        })
-                        .body(|mut body| {
-                            for (i, entry) in app.library.iter().enumerate() {
-                                body.row(22.0, |mut row| {
-                                    row.set_selected(app.sim_lib_selected_row == Some(i));
-                                    row.col(|ui| { ui.label(&entry.name); });
-                                    row.col(|ui| {
-                                        ui.label(format!("{:.2} km", entry.distance_m / 1000.0));
-                                    });
-                                    row.col(|ui| { ui.label(format_duration(entry.duration_s)); });
-                                    row.col(|ui| {
-                                        ui.label(format!("{:.1} km/h", entry.velocity_kmh));
-                                    });
-                                    if row.response().clicked() {
-                                        route_to_load = Some(i);
-                                    }
+                egui::ScrollArea::vertical()
+                    .id_salt("sim_dyn_lib_scroll")
+                    .max_height(160.0)
+                    .show(ui, |ui| {
+                        egui_extras::TableBuilder::new(ui)
+                            .column(Column::initial(160.0).at_least(100.0)) // Name
+                            .column(Column::initial(90.0).at_least(70.0)) // Distance
+                            .column(Column::initial(90.0).at_least(70.0)) // Duration
+                            .column(Column::initial(90.0).at_least(70.0)) // Velocity
+                            .sense(egui::Sense::click())
+                            .resizable(true)
+                            .striped(true)
+                            .header(22.0, |mut row| {
+                                row.col(|ui| {
+                                    ui.strong("Route Name");
                                 });
-                            }
-                        });
-                });
+                                row.col(|ui| {
+                                    ui.strong("Distance");
+                                });
+                                row.col(|ui| {
+                                    ui.strong("Duration");
+                                });
+                                row.col(|ui| {
+                                    ui.strong("Velocity");
+                                });
+                            })
+                            .body(|mut body| {
+                                for (i, entry) in app.library.iter().enumerate() {
+                                    body.row(22.0, |mut row| {
+                                        row.set_selected(app.sim_lib_selected_row == Some(i));
+                                        row.col(|ui| {
+                                            ui.label(&entry.name);
+                                        });
+                                        row.col(|ui| {
+                                            ui.label(format!(
+                                                "{:.2} km",
+                                                entry.distance_m / 1000.0
+                                            ));
+                                        });
+                                        row.col(|ui| {
+                                            ui.label(format_duration(entry.duration_s));
+                                        });
+                                        row.col(|ui| {
+                                            ui.label(format!("{:.1} km/h", entry.velocity_kmh));
+                                        });
+                                        if row.response().clicked() {
+                                            route_to_load = Some(i);
+                                        }
+                                    });
+                                }
+                            });
+                    });
 
-            if let Some(i) = route_to_load {
-                app.sim_lib_selected_row = Some(i);
-                app.load_sim_lib_route(i);
+                if let Some(i) = route_to_load {
+                    app.sim_lib_selected_row = Some(i);
+                    app.load_sim_lib_route(i);
+                }
             }
-        }
-    }));
+        })
+    });
 
     ui.add_space(6.0);
 
@@ -913,12 +934,16 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
             Ok(g) => g.clone(),
             Err(_) => crate::simulator::SimState::default(),
         };
-        let running = app.sim_thread.is_some()
-            || state.status == crate::simulator::SimStatus::Running;
+        let running =
+            app.sim_thread.is_some() || state.status == crate::simulator::SimStatus::Running;
 
         // Compute the current geographic position from simulation progress.
         let current_pos: Option<walkers::Position> = if running || state.total_steps > 0 {
-            interpolate_route_pos(&app.sim_lib_route_points, state.current_step, state.total_steps)
+            interpolate_route_pos(
+                &app.sim_lib_route_points,
+                state.current_step,
+                state.total_steps,
+            )
         } else {
             None
         };
@@ -940,7 +965,9 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
             .unwrap_or_default();
 
         let map = Map::new(
-            app.sim_lib_map_tiles.as_mut().map(|t| t as &mut dyn walkers::Tiles),
+            app.sim_lib_map_tiles
+                .as_mut()
+                .map(|t| t as &mut dyn walkers::Tiles),
             &mut app.sim_lib_map_memory,
             app.sim_lib_route_points
                 .first()
@@ -948,7 +975,9 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                 .unwrap_or_else(|| lat_lon(52.37308687621991, 4.893432625781817)),
         )
         .with_plugin(RouteLinePlugin { points: &route_pts })
-        .with_plugin(WaypointMarkerPlugin { markers: &marker_pts });
+        .with_plugin(WaypointMarkerPlugin {
+            markers: &marker_pts,
+        });
 
         let w = ui.available_width();
         let map_response = ui.add_sized([w, 260.0], map);
@@ -1022,7 +1051,9 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
         let paused = app.sim_pause_flag.load(Ordering::Relaxed);
         let (status_text, status_colour) = match &state.status {
             crate::simulator::SimStatus::Idle => ("Idle", egui::Color32::GRAY),
-            crate::simulator::SimStatus::Running if paused => ("Paused at current position", egui::Color32::GOLD),
+            crate::simulator::SimStatus::Running if paused => {
+                ("Paused at current position", egui::Color32::GOLD)
+            }
             crate::simulator::SimStatus::Running => ("Running…", egui::Color32::GREEN),
             crate::simulator::SimStatus::Done => ("Done", egui::Color32::LIGHT_BLUE),
             crate::simulator::SimStatus::Stopped => ("Stopped by user", egui::Color32::GOLD),
@@ -1033,7 +1064,11 @@ fn show_sim_dynamic_tab(app: &mut MyApp, ui: &mut egui::Ui) {
         if let Some(err) = &state.error {
             ui.horizontal(|ui| {
                 ui.colored_label(egui::Color32::RED, err);
-                if ui.small_button("Copy").on_hover_text("Copy error message to clipboard.").clicked() {
+                if ui
+                    .small_button("Copy")
+                    .on_hover_text("Copy error message to clipboard.")
+                    .clicked()
+                {
                     ui.output_mut(|o| o.commands.push(egui::OutputCommand::CopyText(err.clone())));
                 }
             });
@@ -1152,7 +1187,11 @@ fn interpolate_route_pos(
         return points.last().copied();
     };
     let seg_len = cum.get(i + 1).copied().unwrap_or(0.0) - cum.get(i).copied().unwrap_or(0.0);
-    let frac = if seg_len > 0.0 { (target - cum.get(i).copied().unwrap_or(0.0)) / seg_len } else { 0.0 };
+    let frac = if seg_len > 0.0 {
+        (target - cum.get(i).copied().unwrap_or(0.0)) / seg_len
+    } else {
+        0.0
+    };
 
     Some(lat_lon(
         a.y() + (b.y() - a.y()) * frac,
@@ -1204,7 +1243,11 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                 {
                     open_browse = true;
                 }
-                let dl_label = if downloading { "⏳" } else { "⬇ Download Latest" };
+                let dl_label = if downloading {
+                    "⏳"
+                } else {
+                    "⬇ Download Latest"
+                };
                 if ui
                     .add_enabled(!downloading, egui::Button::new(dl_label))
                     .on_hover_text(crate::rinex::today_rinex_filename())
@@ -1311,15 +1354,22 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
         app.sim_static_map_tiles = Some(HttpTiles::new(OpenStreetMap, ui.ctx().clone()));
     }
 
-    let marker: Vec<(walkers::Position, egui::Color32)> =
-        app.sim_static_wp_selected_row
-            .and_then(|i| waypoints_snap.get(i))
-            .map(|wp| vec![(lat_lon(wp.lat, wp.lon), egui::Color32::from_rgb(70, 150, 255))])
-            .unwrap_or_default();
+    let marker: Vec<(walkers::Position, egui::Color32)> = app
+        .sim_static_wp_selected_row
+        .and_then(|i| waypoints_snap.get(i))
+        .map(|wp| {
+            vec![(
+                lat_lon(wp.lat, wp.lon),
+                egui::Color32::from_rgb(70, 150, 255),
+            )]
+        })
+        .unwrap_or_default();
 
     let my_pos = lat_lon(52.373_086_876_219_91, 4.893_432_625_781_817); // Amsterdam fallback
     let sim_static_map = Map::new(
-        app.sim_static_map_tiles.as_mut().map(|t| t as &mut dyn walkers::Tiles),
+        app.sim_static_map_tiles
+            .as_mut()
+            .map(|t| t as &mut dyn walkers::Tiles),
         &mut app.sim_static_map_memory,
         my_pos,
     )
@@ -1387,10 +1437,10 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
     ui.add_space(8.0);
 
     // ── Control buttons ───────────────────────────────────────────────────────
-    let lat_ok = !app.sim_static_lat.trim().is_empty()
-        && app.sim_static_lat.trim().parse::<f64>().is_ok();
-    let lon_ok = !app.sim_static_lon.trim().is_empty()
-        && app.sim_static_lon.trim().parse::<f64>().is_ok();
+    let lat_ok =
+        !app.sim_static_lat.trim().is_empty() && app.sim_static_lat.trim().parse::<f64>().is_ok();
+    let lon_ok =
+        !app.sim_static_lon.trim().is_empty() && app.sim_static_lon.trim().parse::<f64>().is_ok();
     let ready = app.sim_static_rinex_path.is_some() && lat_ok && lon_ok && !running;
 
     ui.horizontal(|ui| {
@@ -1446,15 +1496,17 @@ fn show_sim_static_tab(app: &mut MyApp, ui: &mut egui::Ui) {
 
         if state.loop_count > 0 {
             ui.label(format!("Loop pass: {}", state.loop_count))
-                .on_hover_text(
-                    "Number of completed loop passes since the simulation started.",
-                );
+                .on_hover_text("Number of completed loop passes since the simulation started.");
         }
 
         if let Some(err) = &state.error {
             ui.horizontal(|ui| {
                 ui.colored_label(egui::Color32::RED, err);
-                if ui.small_button("Copy").on_hover_text("Copy error message to clipboard.").clicked() {
+                if ui
+                    .small_button("Copy")
+                    .on_hover_text("Copy error message to clipboard.")
+                    .clicked()
+                {
                     ui.output_mut(|o| o.commands.push(egui::OutputCommand::CopyText(err.clone())));
                 }
             });
@@ -1537,13 +1589,17 @@ fn geodetic_bearing(from_lat: f64, from_lon: f64, to_lat: f64, to_lon: f64) -> f
 ///
 /// Returns `true` when the user has changed the bearing this frame.
 fn bearing_dial(ui: &mut egui::Ui, bearing_deg: &mut f64, enabled: bool) -> bool {
-    let sense    = if enabled { egui::Sense::click_and_drag() } else { egui::Sense::hover() };
+    let sense = if enabled {
+        egui::Sense::click_and_drag()
+    } else {
+        egui::Sense::hover()
+    };
     let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(140.0), sense);
 
     if ui.is_rect_visible(rect) {
         let painter = ui.painter_at(rect);
-        let center  = rect.center();
-        let r       = rect.width().min(rect.height()) * 0.45;
+        let center = rect.center();
+        let r = rect.width().min(rect.height()) * 0.45;
 
         let (ring_col, dot_col, text_col, card_col) = if enabled {
             (
@@ -1567,9 +1623,9 @@ fn bearing_dial(ui: &mut egui::Ui, bearing_deg: &mut f64, enabled: bool) -> bool
 
         // Cardinal tick marks and labels (N / E / S / W).
         for (label, deg) in [("N", 0.0_f64), ("E", 90.0), ("S", 180.0), ("W", 270.0)] {
-            let rad  = deg.to_radians();
-            let sdx  = rad.sin() as f32;
-            let sdy  = (-rad.cos()) as f32;
+            let rad = deg.to_radians();
+            let sdx = rad.sin() as f32;
+            let sdy = (-rad.cos()) as f32;
             painter.line_segment(
                 [
                     center + egui::vec2(sdx * (r - 8.0), sdy * (r - 8.0)),
@@ -1588,7 +1644,7 @@ fn bearing_dial(ui: &mut egui::Ui, bearing_deg: &mut f64, enabled: bool) -> bool
 
         // Bearing indicator: line from centre to dot on perimeter.
         let b_rad = bearing_deg.to_radians();
-        let dot   = center + egui::vec2((b_rad.sin() as f32) * r, ((-b_rad.cos()) as f32) * r);
+        let dot = center + egui::vec2((b_rad.sin() as f32) * r, ((-b_rad.cos()) as f32) * r);
         painter.line_segment([center, dot], egui::Stroke::new(2.0, dot_col));
         painter.circle_filled(dot, 7.0, dot_col);
 
@@ -1635,19 +1691,29 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
         let mut ist = app.sim_interactive_istate.lock().unwrap();
         ctx.input(|i| {
             // Bearing (A = left / D = right), continuous while key is held.
-            if i.key_down(egui::Key::A) { ist.bearing_deg -= 1.0; }
-            if i.key_down(egui::Key::D) { ist.bearing_deg += 1.0; }
+            if i.key_down(egui::Key::A) {
+                ist.bearing_deg -= 1.0;
+            }
+            if i.key_down(egui::Key::D) {
+                ist.bearing_deg += 1.0;
+            }
             ist.bearing_deg = ist.bearing_deg.rem_euclid(360.0);
 
             // Speed (E = faster / Q = slower), per key-press.
-            if i.key_pressed(egui::Key::E) { ist.speed_ms += 1.0; }
+            if i.key_pressed(egui::Key::E) {
+                ist.speed_ms += 1.0;
+            }
             if i.key_pressed(egui::Key::Q) {
                 ist.speed_ms = (ist.speed_ms - 1.0).max(0.0);
             }
 
             // Vertical speed (W = up / S = down), per key-press.
-            if i.key_pressed(egui::Key::W) { ist.vert_speed_ms += 1.0; }
-            if i.key_pressed(egui::Key::S) { ist.vert_speed_ms -= 1.0; }
+            if i.key_pressed(egui::Key::W) {
+                ist.vert_speed_ms += 1.0;
+            }
+            if i.key_pressed(egui::Key::S) {
+                ist.vert_speed_ms -= 1.0;
+            }
 
             // Stop (X key).
             if i.key_pressed(egui::Key::X) {
@@ -1694,7 +1760,11 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
                 {
                     open_browse = true;
                 }
-                let dl_label = if downloading { "⏳" } else { "⬇ Download Latest" };
+                let dl_label = if downloading {
+                    "⏳"
+                } else {
+                    "⬇ Download Latest"
+                };
                 if ui
                     .add_enabled(!downloading, egui::Button::new(dl_label))
                     .on_hover_text(crate::rinex::today_rinex_filename())
@@ -1761,14 +1831,14 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
         )]
         let ist_snap = app.sim_interactive_istate.lock().unwrap().clone();
 
-        let mut bearing_deg   = ist_snap.bearing_deg;
-        let mut speed_kmh     = ist_snap.speed_ms * 3.6;
+        let mut bearing_deg = ist_snap.bearing_deg;
+        let mut speed_kmh = ist_snap.speed_ms * 3.6;
         let mut vert_speed_ms = ist_snap.vert_speed_ms;
-        let mut stop_motion   = false;
+        let mut stop_motion = false;
 
         let mut bearing_changed = false;
-        let mut speed_changed   = false;
-        let mut vert_changed    = false;
+        let mut speed_changed = false;
+        let mut vert_changed = false;
 
         ui.group(|ui| {
             section_title(ui, "Motion Controls");
@@ -1790,8 +1860,7 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
                     if ui
                         .add_enabled(
                             running,
-                            egui::Slider::new(&mut speed_kmh, 0.0..=300.0)
-                                .suffix(" km/h"),
+                            egui::Slider::new(&mut speed_kmh, 0.0..=300.0).suffix(" km/h"),
                         )
                         .changed()
                     {
@@ -1804,8 +1873,7 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
                     if ui
                         .add_enabled(
                             running,
-                            egui::Slider::new(&mut vert_speed_ms, -50.0..=50.0)
-                                .suffix(" m/s"),
+                            egui::Slider::new(&mut vert_speed_ms, -50.0..=50.0).suffix(" m/s"),
                         )
                         .changed()
                     {
@@ -1841,10 +1909,19 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
                 reason = "mutex poison means a prior panic; best-effort motion update"
             )]
             let mut ist = app.sim_interactive_istate.lock().unwrap();
-            if bearing_changed { ist.bearing_deg   = bearing_deg; }
-            if speed_changed   { ist.speed_ms      = speed_kmh / 3.6; }
-            if vert_changed    { ist.vert_speed_ms = vert_speed_ms; }
-            if stop_motion     { ist.speed_ms = 0.0; ist.vert_speed_ms = 0.0; }
+            if bearing_changed {
+                ist.bearing_deg = bearing_deg;
+            }
+            if speed_changed {
+                ist.speed_ms = speed_kmh / 3.6;
+            }
+            if vert_changed {
+                ist.vert_speed_ms = vert_speed_ms;
+            }
+            if stop_motion {
+                ist.speed_ms = 0.0;
+                ist.vert_speed_ms = 0.0;
+            }
         }
     }
 
@@ -1896,7 +1973,7 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
     {
         let map_state = match app.sim_interactive_state.lock() {
             Ok(guard) => guard.clone(),
-            Err(_)    => crate::simulator::SimState::default(),
+            Err(_) => crate::simulator::SimState::default(),
         };
 
         let live_pos: Option<walkers::Position> =
@@ -1907,8 +1984,16 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
             };
 
         let center_pos = live_pos.unwrap_or_else(|| {
-            let lat = app.sim_interactive_lat.trim().parse::<f64>().unwrap_or(52.373_086);
-            let lon = app.sim_interactive_lon.trim().parse::<f64>().unwrap_or(4.893_433);
+            let lat = app
+                .sim_interactive_lat
+                .trim()
+                .parse::<f64>()
+                .unwrap_or(52.373_086);
+            let lon = app
+                .sim_interactive_lon
+                .trim()
+                .parse::<f64>()
+                .unwrap_or(4.893_433);
             lat_lon(lat, lon)
         });
 
@@ -1924,8 +2009,7 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
             .unwrap_or_default();
 
         if app.sim_interactive_map_tiles.is_none() {
-            app.sim_interactive_map_tiles =
-                Some(HttpTiles::new(OpenStreetMap, ui.ctx().clone()));
+            app.sim_interactive_map_tiles = Some(HttpTiles::new(OpenStreetMap, ui.ctx().clone()));
         }
 
         let map = Map::new(
@@ -1935,7 +2019,9 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
             &mut app.sim_interactive_map_memory,
             center_pos,
         )
-        .with_plugin(ClickCapturePlugin { out: &mut app.sim_interactive_map_clicked })
+        .with_plugin(ClickCapturePlugin {
+            out: &mut app.sim_interactive_map_clicked,
+        })
         .with_plugin(WaypointMarkerPlugin { markers: &markers });
 
         let available_width = ui.available_width();
@@ -1961,10 +2047,16 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
             let to_lon = click.position.x();
             if running {
                 // While running: steer toward the clicked point.
-                let from_lat = if map_state.lat_deg != 0.0 { map_state.lat_deg }
-                               else { app.sim_interactive_lat.trim().parse().unwrap_or(0.0) };
-                let from_lon = if map_state.lon_deg != 0.0 { map_state.lon_deg }
-                               else { app.sim_interactive_lon.trim().parse().unwrap_or(0.0) };
+                let from_lat = if map_state.lat_deg != 0.0 {
+                    map_state.lat_deg
+                } else {
+                    app.sim_interactive_lat.trim().parse().unwrap_or(0.0)
+                };
+                let from_lon = if map_state.lon_deg != 0.0 {
+                    map_state.lon_deg
+                } else {
+                    app.sim_interactive_lon.trim().parse().unwrap_or(0.0)
+                };
                 #[expect(
                     clippy::unwrap_used,
                     reason = "mutex poison means a prior panic; best-effort bearing update"
@@ -1994,18 +2086,19 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
         };
 
         let (status_text, status_colour) = match &state.status {
-            crate::simulator::SimStatus::Idle    => ("Idle",             egui::Color32::GRAY),
-            crate::simulator::SimStatus::Running => ("Running…",         egui::Color32::GREEN),
-            crate::simulator::SimStatus::Done    => ("Done",             egui::Color32::LIGHT_BLUE),
-            crate::simulator::SimStatus::Stopped => ("Stopped by user",  egui::Color32::GOLD),
-            crate::simulator::SimStatus::Error   => ("Error",            egui::Color32::RED),
+            crate::simulator::SimStatus::Idle => ("Idle", egui::Color32::GRAY),
+            crate::simulator::SimStatus::Running => ("Running…", egui::Color32::GREEN),
+            crate::simulator::SimStatus::Done => ("Done", egui::Color32::LIGHT_BLUE),
+            crate::simulator::SimStatus::Stopped => ("Stopped by user", egui::Color32::GOLD),
+            crate::simulator::SimStatus::Error => ("Error", egui::Color32::RED),
         };
         ui.label(egui::RichText::new(status_text).color(status_colour));
 
         if let Some(err) = &state.error {
             ui.horizontal(|ui| {
                 ui.colored_label(egui::Color32::RED, err);
-                if ui.small_button("Copy")
+                if ui
+                    .small_button("Copy")
                     .on_hover_text("Copy error message to clipboard.")
                     .clicked()
                 {
@@ -2021,10 +2114,7 @@ fn show_sim_interactive_tab(app: &mut MyApp, ui: &mut egui::Ui, ctx: &egui::Cont
         };
         ui.add(
             egui::ProgressBar::new(progress)
-                .text(format!(
-                    "{:.1} s elapsed",
-                    state.current_step as f64 / 10.0,
-                ))
+                .text(format!("{:.1} s elapsed", state.current_step as f64 / 10.0,))
                 .desired_width(500.0),
         )
         .on_hover_text("Simulation time elapsed since start.");
@@ -2073,7 +2163,11 @@ fn show_sim_settings_tab(app: &mut MyApp, ui: &mut egui::Ui) {
     let either_running = app.sim_thread.is_some() || app.sim_static_thread.is_some();
 
     ui.add_space(4.0);
-    ui.label(egui::RichText::new("Shared by Dynamic Mode and Static Mode.").weak().italics());
+    ui.label(
+        egui::RichText::new("Shared by Dynamic Mode and Static Mode.")
+            .weak()
+            .italics(),
+    );
     ui.add_space(6.0);
 
     // ── Simulation settings ───────────────────────────────────────────────────
@@ -2211,16 +2305,36 @@ fn show_sim_settings_tab(app: &mut MyApp, ui: &mut egui::Ui) {
             section_title(ui, "Output Sink");
 
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut app.sim_output_type, crate::simulator::SimOutputType::HackRf, "HackRF")
-                    .on_hover_text("Transmit via HackRF One USB device.");
-                ui.selectable_value(&mut app.sim_output_type, crate::simulator::SimOutputType::IqFile, "IQ File")
-                    .on_hover_text("Write raw 8-bit IQ samples to a file.");
-                ui.selectable_value(&mut app.sim_output_type, crate::simulator::SimOutputType::Udp, "UDP")
-                    .on_hover_text("Stream IQ samples over UDP.");
-                ui.selectable_value(&mut app.sim_output_type, crate::simulator::SimOutputType::Tcp, "TCP Server")
-                    .on_hover_text("Stream IQ samples over TCP (waits for one client connection).");
-                ui.selectable_value(&mut app.sim_output_type, crate::simulator::SimOutputType::Null, "Null")
-                    .on_hover_text("Discard output — useful for testing.");
+                ui.selectable_value(
+                    &mut app.sim_output_type,
+                    crate::simulator::SimOutputType::HackRf,
+                    "HackRF",
+                )
+                .on_hover_text("Transmit via HackRF One USB device.");
+                ui.selectable_value(
+                    &mut app.sim_output_type,
+                    crate::simulator::SimOutputType::IqFile,
+                    "IQ File",
+                )
+                .on_hover_text("Write raw 8-bit IQ samples to a file.");
+                ui.selectable_value(
+                    &mut app.sim_output_type,
+                    crate::simulator::SimOutputType::Udp,
+                    "UDP",
+                )
+                .on_hover_text("Stream IQ samples over UDP.");
+                ui.selectable_value(
+                    &mut app.sim_output_type,
+                    crate::simulator::SimOutputType::Tcp,
+                    "TCP Server",
+                )
+                .on_hover_text("Stream IQ samples over TCP (waits for one client connection).");
+                ui.selectable_value(
+                    &mut app.sim_output_type,
+                    crate::simulator::SimOutputType::Null,
+                    "Null",
+                )
+                .on_hover_text("Discard output — useful for testing.");
             });
 
             match app.sim_output_type {
@@ -2241,8 +2355,7 @@ fn show_sim_settings_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                     ui.horizontal(|ui| {
                         ui.label("Listen port:");
                         ui.add(
-                            egui::DragValue::new(&mut app.sim_tcp_port)
-                                .range(1024_u16..=65535_u16),
+                            egui::DragValue::new(&mut app.sim_tcp_port).range(1024_u16..=65535_u16),
                         );
                     });
                 }
@@ -2259,11 +2372,10 @@ fn show_sim_settings_tab(app: &mut MyApp, ui: &mut egui::Ui) {
             section_title(ui, "HackRF Settings");
 
             ui.horizontal(|ui| {
-                ui.label("TX VGA Gain:")
-                    .on_hover_text(
-                        "Transmit Variable Gain Amplifier level (0–47 dB). \
+                ui.label("TX VGA Gain:").on_hover_text(
+                    "Transmit Variable Gain Amplifier level (0–47 dB). \
                          Higher values increase the transmitted signal power.",
-                    );
+                );
                 ui.add(egui::Slider::new(&mut app.sim_txvga_gain, 0..=47).suffix(" dB"))
                     .on_hover_text(
                         "HackRF TX VGA gain in dB (0–47). \
@@ -2271,11 +2383,10 @@ fn show_sim_settings_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                     );
             });
             ui.horizontal(|ui| {
-                ui.label("Sample Rate:")
-                    .on_hover_text(
-                        "Baseband IQ sample rate sent to the HackRF. \
+                ui.label("Sample Rate:").on_hover_text(
+                    "Baseband IQ sample rate sent to the HackRF. \
                          Must be at least 2.046 MHz for GPS L1 C/A.",
-                    );
+                );
                 ui.add(
                     egui::Slider::new(&mut app.sim_frequency, 1_000_000..=20_000_000)
                         .suffix(" Hz")
@@ -2494,7 +2605,11 @@ fn show_map_click_popup(
                     dismissed = true;
                 }
                 ui.separator();
-                if ui.button("Dismiss").on_hover_text("Close this popup.").clicked() {
+                if ui
+                    .button("Dismiss")
+                    .on_hover_text("Close this popup.")
+                    .clicked()
+                {
                     dismissed = true;
                 }
             });
@@ -2515,10 +2630,9 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
     ui.horizontal(|ui| {
         ui.label("Route name:")
             .on_hover_text("Name used for the output files: {name}.csv and {name}.geojson.");
-        ui.text_edit_singleline(&mut app.route_name)
-            .on_hover_text(
-                "Enter a filename-safe name for the route (no spaces or special characters).",
-            );
+        ui.text_edit_singleline(&mut app.route_name).on_hover_text(
+            "Enter a filename-safe name for the route (no spaces or special characters).",
+        );
     });
 
     ui.add_space(4.0);
@@ -2544,12 +2658,8 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
             "Import KML / GPX",
         )
         .on_hover_text("Import track points from a GPX or KML file.");
-        ui.selectable_value(
-            &mut app.route_source,
-            RouteSource::DrawImport,
-            "Draw route",
-        )
-        .on_hover_text("Click on the map to place waypoints and build a custom polyline.");
+        ui.selectable_value(&mut app.route_source, RouteSource::DrawImport, "Draw route")
+            .on_hover_text("Click on the map to place waypoints and build a custom polyline.");
     });
 
     ui.separator();
@@ -2558,20 +2668,15 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
         RouteSource::OrsApi => {
             // ── ORS settings ──────────────────────────────────────────────────
             ui.horizontal(|ui| {
-                ui.label("Profile:")
-                    .on_hover_text(
-                        "Routing profile determines which roads/paths are used \
+                ui.label("Profile:").on_hover_text(
+                    "Routing profile determines which roads/paths are used \
                          and how the route is calculated.",
-                    );
+                );
                 egui::ComboBox::from_id_salt("ors_profile")
                     .selected_text(ors_profile_label(&app.ors_profile))
                     .show_ui(ui, |ui| {
                         for &(id, label) in ORS_PROFILES {
-                            ui.selectable_value(
-                                &mut app.ors_profile,
-                                id.to_owned(),
-                                label,
-                            );
+                            ui.selectable_value(&mut app.ors_profile, id.to_owned(), label);
                         }
                     })
                     .response
@@ -2584,13 +2689,11 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
 
             // ── ORS: start / via / end coordinate inputs ──────────────────────
             ui.horizontal(|ui| {
-                ui.label("Start:")
-                    .on_hover_text("Route start point.");
-                ui.text_edit_singleline(&mut app.start.text)
-                    .on_hover_text(
-                        "Enter coordinates as \"lat, lon\" in decimal degrees, \
+                ui.label("Start:").on_hover_text("Route start point.");
+                ui.text_edit_singleline(&mut app.start.text).on_hover_text(
+                    "Enter coordinates as \"lat, lon\" in decimal degrees, \
                          e.g. 52.3731, 4.8934. You can also click on the map.",
-                    );
+                );
             });
 
             ui.add_space(4.0);
@@ -2603,10 +2706,9 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
                     for (i, via) in app.viapoints.iter_mut().enumerate() {
                         ui.horizontal(|ui| {
                             ui.label(format!("Via {}:", i + 1));
-                            ui.text_edit_singleline(&mut via.text)
-                                .on_hover_text(
-                                    "Intermediate waypoint as \"lat, lon\" in decimal degrees.",
-                                );
+                            ui.text_edit_singleline(&mut via.text).on_hover_text(
+                                "Intermediate waypoint as \"lat, lon\" in decimal degrees.",
+                            );
                             if ui
                                 .button("X")
                                 .on_hover_text("Remove this via point.")
@@ -2629,22 +2731,19 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
             ui.add_space(4.0);
 
             ui.horizontal(|ui| {
-                ui.label("End:")
-                    .on_hover_text("Route end point.");
-                ui.text_edit_singleline(&mut app.end.text)
-                    .on_hover_text(
-                        "Enter coordinates as \"lat, lon\" in decimal degrees, \
+                ui.label("End:").on_hover_text("Route end point.");
+                ui.text_edit_singleline(&mut app.end.text).on_hover_text(
+                    "Enter coordinates as \"lat, lon\" in decimal degrees, \
                          e.g. 52.3731, 4.8934. You can also click on the map.",
-                    );
+                );
             });
 
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label("Velocity:")
-                    .on_hover_text(
-                        "Simulated movement speed used to compute the transmit-point spacing.",
-                    );
+                ui.label("Velocity:").on_hover_text(
+                    "Simulated movement speed used to compute the transmit-point spacing.",
+                );
                 ui.add(egui::TextEdit::singleline(&mut app.velocity).desired_width(60.0))
                     .on_hover_text("Speed in km/h, e.g. 50.");
                 ui.label("km/h");
@@ -2665,10 +2764,7 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
             for via in &app.viapoints {
                 if let Ok(c) = crate::geo::parse_coords(&via.text) {
                     if let [lat, lon, ..] = c.as_slice() {
-                        markers.push((
-                            lat_lon(*lat, *lon),
-                            egui::Color32::from_rgb(255, 140, 0),
-                        ));
+                        markers.push((lat_lon(*lat, *lon), egui::Color32::from_rgb(255, 140, 0)));
                     }
                 }
             }
@@ -2729,10 +2825,9 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label("Velocity:")
-                    .on_hover_text(
-                        "Simulated movement speed used to compute the transmit-point spacing.",
-                    );
+                ui.label("Velocity:").on_hover_text(
+                    "Simulated movement speed used to compute the transmit-point spacing.",
+                );
                 ui.add(egui::TextEdit::singleline(&mut app.velocity).desired_width(60.0))
                     .on_hover_text("Speed in km/h, e.g. 50.");
                 ui.label("km/h");
@@ -2792,10 +2887,9 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label("Velocity:")
-                    .on_hover_text(
-                        "Simulated movement speed used to compute the transmit-point spacing.",
-                    );
+                ui.label("Velocity:").on_hover_text(
+                    "Simulated movement speed used to compute the transmit-point spacing.",
+                );
                 ui.add(egui::TextEdit::singleline(&mut app.velocity).desired_width(60.0))
                     .on_hover_text("Speed in km/h, e.g. 50.");
                 ui.label("km/h");
@@ -2829,10 +2923,7 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
 
             let n = app.draw_route_points.len();
             if n > 0 {
-                ui.label(format!(
-                    "{n} point{} loaded",
-                    if n == 1 { "" } else { "s" }
-                ));
+                ui.label(format!("{n} point{} loaded", if n == 1 { "" } else { "s" }));
             }
 
             if let Some(err) = &app.draw_route_status {
@@ -2842,10 +2933,9 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label("Velocity:")
-                    .on_hover_text(
-                        "Simulated movement speed used to compute the transmit-point spacing.",
-                    );
+                ui.label("Velocity:").on_hover_text(
+                    "Simulated movement speed used to compute the transmit-point spacing.",
+                );
                 ui.add(egui::TextEdit::singleline(&mut app.velocity).desired_width(60.0))
                     .on_hover_text("Speed in km/h, e.g. 50.");
                 ui.label("km/h");
@@ -2858,9 +2948,7 @@ fn show_create_route_page(app: &mut MyApp, ui: &mut egui::Ui) -> RoutePageAction
     let working = matches!(app.status, AppStatus::Working);
     let can_generate = !working
         && match app.route_source {
-            RouteSource::DrawImport | RouteSource::ImportKmlGpx => {
-                app.draw_route_points.len() >= 2
-            }
+            RouteSource::DrawImport | RouteSource::ImportKmlGpx => app.draw_route_points.len() >= 2,
             _ => true,
         };
     if ui
@@ -2938,7 +3026,10 @@ fn show_waypoints_page(app: &mut MyApp, ui: &mut egui::Ui) -> WaypointPageAction
     let mut markers: Vec<(walkers::Position, egui::Color32)> = Vec::new();
     if let Some(idx) = app.wp_selected_row {
         if let Some(wp) = app.waypoints.get(idx) {
-            markers.push((lat_lon(wp.lat, wp.lon), egui::Color32::from_rgb(70, 150, 255)));
+            markers.push((
+                lat_lon(wp.lat, wp.lon),
+                egui::Color32::from_rgb(70, 150, 255),
+            ));
         }
     }
     if app.editing_index.is_some() {
@@ -3043,7 +3134,9 @@ fn sortable_header_text(
     let resp = ui
         .add(egui::Label::new(text).sense(egui::Sense::click()))
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(format!("Click to sort by {label}. Click again to reverse order."));
+        .on_hover_text(format!(
+            "Click to sort by {label}. Click again to reverse order."
+        ));
     if resp.clicked() {
         if *sort_column == Some(col_idx) {
             *sort_ascending = !*sort_ascending;
@@ -3104,32 +3197,66 @@ fn show_waypoint_table(app: &mut MyApp, ui: &mut egui::Ui, actions: &mut Waypoin
             egui_extras::TableBuilder::new(ui)
                 .column(Column::initial(160.0).at_least(100.0)) // Name
                 .column(Column::initial(160.0).at_least(100.0)) // Location
-                .column(Column::initial(120.0).at_least(80.0))  // Category
-                .column(Column::initial(100.0).at_least(70.0))  // Latitude
-                .column(Column::initial(100.0).at_least(70.0))  // Longitude
-                .column(Column::initial(60.0).at_least(50.0))   // Edit
-                .column(Column::initial(60.0).at_least(50.0))   // Delete
+                .column(Column::initial(120.0).at_least(80.0)) // Category
+                .column(Column::initial(100.0).at_least(70.0)) // Latitude
+                .column(Column::initial(100.0).at_least(70.0)) // Longitude
+                .column(Column::initial(60.0).at_least(50.0)) // Edit
+                .column(Column::initial(60.0).at_least(50.0)) // Delete
                 .sense(egui::Sense::click())
                 .resizable(true)
                 .striped(true)
                 .header(24.0, |mut row| {
                     row.col(|ui| {
-                        sortable_header_text(ui, "Name", 0, &mut app.sort_column, &mut app.sort_ascending);
+                        sortable_header_text(
+                            ui,
+                            "Name",
+                            0,
+                            &mut app.sort_column,
+                            &mut app.sort_ascending,
+                        );
                     });
                     row.col(|ui| {
-                        sortable_header_text(ui, "Location", 1, &mut app.sort_column, &mut app.sort_ascending);
+                        sortable_header_text(
+                            ui,
+                            "Location",
+                            1,
+                            &mut app.sort_column,
+                            &mut app.sort_ascending,
+                        );
                     });
                     row.col(|ui| {
-                        sortable_header_text(ui, "Category", 2, &mut app.sort_column, &mut app.sort_ascending);
+                        sortable_header_text(
+                            ui,
+                            "Category",
+                            2,
+                            &mut app.sort_column,
+                            &mut app.sort_ascending,
+                        );
                     });
                     row.col(|ui| {
-                        sortable_header_text(ui, "Latitude", 3, &mut app.sort_column, &mut app.sort_ascending);
+                        sortable_header_text(
+                            ui,
+                            "Latitude",
+                            3,
+                            &mut app.sort_column,
+                            &mut app.sort_ascending,
+                        );
                     });
                     row.col(|ui| {
-                        sortable_header_text(ui, "Longitude", 4, &mut app.sort_column, &mut app.sort_ascending);
+                        sortable_header_text(
+                            ui,
+                            "Longitude",
+                            4,
+                            &mut app.sort_column,
+                            &mut app.sort_ascending,
+                        );
                     });
-                    row.col(|ui| { ui.strong("Edit"); });
-                    row.col(|ui| { ui.strong("Delete"); });
+                    row.col(|ui| {
+                        ui.strong("Edit");
+                    });
+                    row.col(|ui| {
+                        ui.strong("Delete");
+                    });
                 })
                 .body(|mut body| {
                     for waypoint in &display {
@@ -3142,11 +3269,21 @@ fn show_waypoint_table(app: &mut MyApp, ui: &mut egui::Ui, actions: &mut Waypoin
                         body.row(28.0, |mut row| {
                             row.set_selected(app.wp_selected_row == orig_idx && orig_idx.is_some());
 
-                            row.col(|ui| { ui.label(&waypoint.name); });
-                            row.col(|ui| { ui.label(&waypoint.location); });
-                            row.col(|ui| { ui.label(&waypoint.category); });
-                            row.col(|ui| { ui.label(format!("{:.6}", waypoint.lat)); });
-                            row.col(|ui| { ui.label(format!("{:.6}", waypoint.lon)); });
+                            row.col(|ui| {
+                                ui.label(&waypoint.name);
+                            });
+                            row.col(|ui| {
+                                ui.label(&waypoint.location);
+                            });
+                            row.col(|ui| {
+                                ui.label(&waypoint.category);
+                            });
+                            row.col(|ui| {
+                                ui.label(format!("{:.6}", waypoint.lat));
+                            });
+                            row.col(|ui| {
+                                ui.label(format!("{:.6}", waypoint.lon));
+                            });
 
                             let mut action_clicked = false;
                             row.col(|ui| {
@@ -3190,11 +3327,10 @@ fn show_add_waypoint_form(app: &mut MyApp, ui: &mut egui::Ui) {
         .num_columns(2)
         .spacing([8.0, 6.0])
         .show(ui, |ui| {
-            ui.label("Coordinates (lat, lon):")
-                .on_hover_text(
-                    "WGS-84 latitude and longitude in decimal degrees. \
+            ui.label("Coordinates (lat, lon):").on_hover_text(
+                "WGS-84 latitude and longitude in decimal degrees. \
                      You can also click on the map to fill this field automatically.",
-                );
+            );
             ui.add(
                 egui::TextEdit::singleline(&mut app.new_waypoint_coords)
                     .hint_text("e.g. 52.3731, 4.8934")
@@ -3215,11 +3351,14 @@ fn show_add_waypoint_form(app: &mut MyApp, ui: &mut egui::Ui) {
             ui.label("Location:")
                 .on_hover_text("City, area, or place description for the waypoint.");
             ui.text_edit_singleline(&mut app.new_waypoint.location)
-                .on_hover_text("Human-readable description of the location, e.g. \"Amsterdam, NL\".");
+                .on_hover_text(
+                    "Human-readable description of the location, e.g. \"Amsterdam, NL\".",
+                );
             ui.end_row();
 
-            ui.label("Category:")
-                .on_hover_text("Tag used to group waypoints, e.g. \"Airport\", \"Home\", \"Test\".");
+            ui.label("Category:").on_hover_text(
+                "Tag used to group waypoints, e.g. \"Airport\", \"Home\", \"Test\".",
+            );
             ui.text_edit_singleline(&mut app.new_waypoint.category)
                 .on_hover_text(
                     "Category label for filtering and grouping, e.g. \"Airport\" or \"City\".",
@@ -3385,8 +3524,7 @@ fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> RouteLibraryActions {
 
         // ── Editable map ──────────────────────────────────────────────────
         if app.lib_edit_map_tiles.is_none() {
-            app.lib_edit_map_tiles =
-                Some(HttpTiles::new(OpenStreetMap, ui.ctx().clone()));
+            app.lib_edit_map_tiles = Some(HttpTiles::new(OpenStreetMap, ui.ctx().clone()));
         }
 
         let center = app
@@ -3430,8 +3568,10 @@ fn show_routes_page(app: &mut MyApp, ui: &mut egui::Ui) -> RouteLibraryActions {
 
     // ── Route preview map ─────────────────────────────────────────────────
     if app.lib_map_tiles.is_none() {
-        app.lib_map_tiles =
-            Some(HttpTiles::new(walkers::sources::OpenStreetMap, ui.ctx().clone()));
+        app.lib_map_tiles = Some(HttpTiles::new(
+            walkers::sources::OpenStreetMap,
+            ui.ctx().clone(),
+        ));
     }
 
     let points: Vec<walkers::Position> = app.lib_route_points.clone();
@@ -3464,10 +3604,8 @@ fn show_library_table(app: &MyApp, ui: &mut egui::Ui, actions: &mut RouteLibrary
     if app.library.is_empty() {
         ui.add_space(8.0);
         ui.label(
-            egui::RichText::new(
-                "No routes in library. Press \"Rescan Library\" to populate.",
-            )
-            .weak(),
+            egui::RichText::new("No routes in library. Press \"Rescan Library\" to populate.")
+                .weak(),
         );
         return;
     }
@@ -3477,32 +3615,48 @@ fn show_library_table(app: &MyApp, ui: &mut egui::Ui, actions: &mut RouteLibrary
         .show(ui, |ui| {
             egui_extras::TableBuilder::new(ui)
                 .column(egui_extras::Column::initial(200.0).at_least(120.0)) // Name
-                .column(egui_extras::Column::initial(110.0).at_least(80.0))  // Distance
-                .column(egui_extras::Column::initial(110.0).at_least(80.0))  // Duration
-                .column(egui_extras::Column::initial(110.0).at_least(80.0))  // Velocity
-                .column(egui_extras::Column::initial(60.0).at_least(50.0))   // Edit
-                .column(egui_extras::Column::initial(60.0).at_least(50.0))   // Delete
+                .column(egui_extras::Column::initial(110.0).at_least(80.0)) // Distance
+                .column(egui_extras::Column::initial(110.0).at_least(80.0)) // Duration
+                .column(egui_extras::Column::initial(110.0).at_least(80.0)) // Velocity
+                .column(egui_extras::Column::initial(60.0).at_least(50.0)) // Edit
+                .column(egui_extras::Column::initial(60.0).at_least(50.0)) // Delete
                 .sense(egui::Sense::click())
                 .resizable(true)
                 .striped(true)
                 .header(24.0, |mut row| {
-                    row.col(|ui| { ui.strong("Route Name"); });
-                    row.col(|ui| { ui.strong("Distance"); });
-                    row.col(|ui| { ui.strong("Duration"); });
-                    row.col(|ui| { ui.strong("Velocity"); });
-                    row.col(|ui| { ui.strong("Edit"); });
-                    row.col(|ui| { ui.strong("Delete"); });
+                    row.col(|ui| {
+                        ui.strong("Route Name");
+                    });
+                    row.col(|ui| {
+                        ui.strong("Distance");
+                    });
+                    row.col(|ui| {
+                        ui.strong("Duration");
+                    });
+                    row.col(|ui| {
+                        ui.strong("Velocity");
+                    });
+                    row.col(|ui| {
+                        ui.strong("Edit");
+                    });
+                    row.col(|ui| {
+                        ui.strong("Delete");
+                    });
                 })
                 .body(|mut body| {
                     for (i, entry) in app.library.iter().enumerate() {
                         body.row(24.0, |mut row| {
                             row.set_selected(app.library_selected_row == Some(i));
 
-                            row.col(|ui| { ui.label(&entry.name); });
+                            row.col(|ui| {
+                                ui.label(&entry.name);
+                            });
                             row.col(|ui| {
                                 ui.label(format!("{:.2} km", entry.distance_m / 1000.0));
                             });
-                            row.col(|ui| { ui.label(format_duration(entry.duration_s)); });
+                            row.col(|ui| {
+                                ui.label(format_duration(entry.duration_s));
+                            });
                             row.col(|ui| {
                                 ui.label(format!("{:.1} km/h", entry.velocity_kmh));
                             });

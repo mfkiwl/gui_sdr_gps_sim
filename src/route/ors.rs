@@ -29,9 +29,7 @@ pub async fn get_ors_route(
         "instructions": "false",
     });
 
-    let url = format!(
-        "https://api.openrouteservice.org/v2/directions/{profile}/geojson"
-    );
+    let url = format!("https://api.openrouteservice.org/v2/directions/{profile}/geojson");
 
     let response = client
         .post(url)

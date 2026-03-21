@@ -4,9 +4,12 @@
 //! - IS-GPS-200 §20.3.3.4.3.1 — User algorithm for ephemeris determination
 //! - IS-GPS-200 §20.3.3.3.3.1 — SV clock correction
 
-use super::types::{Ephemeris, IonoUtc, GpsTime, consts::{GM_EARTH, OMEGA_EARTH, SPEED_OF_LIGHT}};
-use super::coords::{ecef_to_llh, ltc_matrix, ecef_to_neu, neu_to_azel};
+use super::coords::{ecef_to_llh, ecef_to_neu, ltc_matrix, neu_to_azel};
 use super::ionosphere::klobuchar_delay;
+use super::types::{
+    Ephemeris, GpsTime, IonoUtc,
+    consts::{GM_EARTH, OMEGA_EARTH, SPEED_OF_LIGHT},
+};
 
 // ── Satellite state ───────────────────────────────────────────────────────────
 
@@ -43,13 +46,17 @@ pub fn sat_pos(eph: &Ephemeris, t: GpsTime) -> SatState {
     // ── 1. Time since ephemeris ───────────────────────────────────────────────
     let mut tk = t.sub(eph.toe);
     // Wrap to ±302 400 s (half-week) to handle week rollover.
-    if tk > 302_400.0 { tk -= GpsTime::SECS_PER_WEEK; }
-    if tk < -302_400.0 { tk += GpsTime::SECS_PER_WEEK; }
+    if tk > 302_400.0 {
+        tk -= GpsTime::SECS_PER_WEEK;
+    }
+    if tk < -302_400.0 {
+        tk += GpsTime::SECS_PER_WEEK;
+    }
 
     // ── 2. Corrected mean motion ──────────────────────────────────────────────
-    let a = eph.sqrta * eph.sqrta;           // semi-major axis (m)
+    let a = eph.sqrta * eph.sqrta; // semi-major axis (m)
     let n0 = (GM_EARTH / (a * a * a)).sqrt(); // Keplerian mean motion (rad/s)
-    let n = n0 + eph.deltan;                  // corrected mean motion
+    let n = n0 + eph.deltan; // corrected mean motion
 
     // ── 3. Mean anomaly ───────────────────────────────────────────────────────
     let mk = eph.m0 + n * tk;
@@ -60,7 +67,9 @@ pub fn sat_pos(eph: &Ephemeris, t: GpsTime) -> SatState {
     for _ in 0..50 {
         let ek_old = ek;
         ek = mk + eph.ecc * ek.sin();
-        if (ek - ek_old).abs() < 1e-14 { break; }
+        if (ek - ek_old).abs() < 1e-14 {
+            break;
+        }
     }
     let sek = ek.sin();
     let cek = ek.cos();
@@ -78,9 +87,9 @@ pub fn sat_pos(eph: &Ephemeris, t: GpsTime) -> SatState {
     let delta_r = eph.crs * sin2vk + eph.crc * cos2vk; // radius correction (m)
     let delta_i = eph.cis * sin2vk + eph.cic * cos2vk; // inclination corr.
 
-    let u = vk + delta_u;                               // corrected arg. of lat.
-    let r = a * (1.0 - eph.ecc * cek) + delta_r;       // corrected radius (m)
-    let i = eph.inc0 + eph.idot * tk + delta_i;         // corrected inclination
+    let u = vk + delta_u; // corrected arg. of lat.
+    let r = a * (1.0 - eph.ecc * cek) + delta_r; // corrected radius (m)
+    let i = eph.inc0 + eph.idot * tk + delta_i; // corrected inclination
 
     // ── 7. Longitude of ascending node (ECEF) ────────────────────────────────
     // Ω = Ω₀ + (Ω̇ - Ω_e)·tk - Ω_e·toe
@@ -95,11 +104,7 @@ pub fn sat_pos(eph: &Ephemeris, t: GpsTime) -> SatState {
     let xp = r * cu; // in-plane coordinates
     let yp = r * su;
 
-    let pos_ecef = [
-        xp * co - yp * ci * so,
-        xp * so + yp * ci * co,
-        yp * si,
-    ];
+    let pos_ecef = [xp * co - yp * ci * so, xp * so + yp * ci * co, yp * si];
 
     // ── 9. Analytical velocity ────────────────────────────────────────────────
     // Derived by differentiating position w.r.t. time (chain rule through E, ν, u, r, i, Ω).
@@ -138,7 +143,12 @@ pub fn sat_pos(eph: &Ephemeris, t: GpsTime) -> SatState {
     let clk_bias = eph.af0 + dt_clk * (eph.af1 + dt_clk * eph.af2) + rel - eph.tgd;
     let clk_drift = eph.af1 + 2.0 * dt_clk * eph.af2;
 
-    SatState { pos_ecef, vel_ecef, clk_bias, clk_drift }
+    SatState {
+        pos_ecef,
+        vel_ecef,
+        clk_bias,
+        clk_drift,
+    }
 }
 
 // ── Range computation ─────────────────────────────────────────────────────────
@@ -168,7 +178,10 @@ pub struct RangeResult {
 /// 3. Apply Sagnac correction: rotate satellite position by `Ω_e` · τ.
 /// 4. Final range, range rate, azimuth, elevation.
 /// 5. Add Klobuchar ionospheric delay.
-#[expect(clippy::indexing_slicing, reason = "from_fn guarantees i<3; pos_ecef, rx_ecef, rot_pos, vel_ecef, d_pos are all fixed-size [f64;3]")]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "from_fn guarantees i<3; pos_ecef, rx_ecef, rot_pos, vel_ecef, d_pos are all fixed-size [f64;3]"
+)]
 pub fn compute_range(
     eph: &Ephemeris,
     iono: &IonoUtc,
@@ -188,7 +201,7 @@ pub fn compute_range(
     let (sw, cw) = (w.sin(), w.cos());
     let rot_pos = [
         state.pos_ecef[0] * cw + state.pos_ecef[1] * sw,
-       -state.pos_ecef[0] * sw + state.pos_ecef[1] * cw,
+        -state.pos_ecef[0] * sw + state.pos_ecef[1] * cw,
         state.pos_ecef[2],
     ];
 
@@ -201,21 +214,32 @@ pub fn compute_range(
     let neu = ecef_to_neu(d_pos, ltc);
     let (az, el) = neu_to_azel(neu);
 
-    if el < 0.0 { return None; } // below horizon — do not track
+    if el < 0.0 {
+        return None;
+    } // below horizon — do not track
 
     // ── Range rate (dot product of velocity with unit LOS vector) ─────────────
     let rate = state.vel_ecef[0] * d_pos[0] / d
-             + state.vel_ecef[1] * d_pos[1] / d
-             + state.vel_ecef[2] * d_pos[2] / d;
+        + state.vel_ecef[1] * d_pos[1] / d
+        + state.vel_ecef[2] * d_pos[2] / d;
 
     // ── Pseudorange = geometric - clock_bias + iono + tropo ──────────────────
     let llh_arr = [rx_llh.lat_rad, rx_llh.lon_rad, rx_llh.height_m];
-    let iono_m  = klobuchar_delay(iono, grx, llh_arr, [az, el]);
-    let trop_m  = super::troposphere::tropospheric_delay(el, rx_llh.height_m);
-    let range   = d - SPEED_OF_LIGHT * state.clk_bias + iono_m + trop_m;
+    let iono_m = klobuchar_delay(iono, grx, llh_arr, [az, el]);
+    let trop_m = super::troposphere::tropospheric_delay(el, rx_llh.height_m);
+    let range = d - SPEED_OF_LIGHT * state.clk_bias + iono_m + trop_m;
 
-    #[expect(clippy::tuple_array_conversions, reason = "az and el are plain f64 locals, not a tuple being converted")]
-    Some(RangeResult { g: grx, range, d, azel: [az, el], rate })
+    #[expect(
+        clippy::tuple_array_conversions,
+        reason = "az and el are plain f64 locals, not a tuple being converted"
+    )]
+    Some(RangeResult {
+        g: grx,
+        range,
+        d,
+        azel: [az, el],
+        rate,
+    })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -239,8 +263,14 @@ mod tests {
             omgdot: -8.0e-9,
             idot: 0.0,
             deltan: 0.0,
-            toe: GpsTime { week: 2300, sec: 0.0 },
-            toc: GpsTime { week: 2300, sec: 0.0 },
+            toe: GpsTime {
+                week: 2300,
+                sec: 0.0,
+            },
+            toc: GpsTime {
+                week: 2300,
+                sec: 0.0,
+            },
             ..Default::default()
         }
     }
@@ -248,14 +278,23 @@ mod tests {
     #[test]
     fn circular_orbit_radius() {
         let eph = dummy_eph();
-        let state = sat_pos(&eph, GpsTime { week: 2300, sec: 0.0 });
+        let state = sat_pos(
+            &eph,
+            GpsTime {
+                week: 2300,
+                sec: 0.0,
+            },
+        );
         let r = (state.pos_ecef.iter().map(|x| x * x).sum::<f64>()).sqrt();
         let expected = eph.sqrta * eph.sqrta;
         assert_relative_eq!(r, expected, epsilon = 1.0); // within 1 m
     }
 
     #[test]
-    #[expect(clippy::indexing_slicing, reason = "indexing fixed-size [f64;3] arrays with i<3 in test")]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "indexing fixed-size [f64;3] arrays with i<3 in test"
+    )]
     fn velocity_magnitude_circular() {
         // Verify analytical velocity against numerical differentiation.
         // Note: ECEF velocity differs from the inertial orbital speed because
@@ -263,11 +302,17 @@ mod tests {
         // to sqrt(GM/a).  Instead we check the analytical vel agrees with a
         // finite-difference estimate at a 1 ms step.
         let eph = dummy_eph();
-        let dt  = 0.001_f64; // 1 ms
-        let t0  = GpsTime { week: 2300, sec: 0.0 };
-        let t1  = GpsTime { week: 2300, sec: dt };
-        let s0  = sat_pos(&eph, t0);
-        let s1  = sat_pos(&eph, t1);
+        let dt = 0.001_f64; // 1 ms
+        let t0 = GpsTime {
+            week: 2300,
+            sec: 0.0,
+        };
+        let t1 = GpsTime {
+            week: 2300,
+            sec: dt,
+        };
+        let s0 = sat_pos(&eph, t0);
+        let s1 = sat_pos(&eph, t1);
 
         let v_numerical = (0..3)
             .map(|i| ((s1.pos_ecef[i] - s0.pos_ecef[i]) / dt).powi(2))

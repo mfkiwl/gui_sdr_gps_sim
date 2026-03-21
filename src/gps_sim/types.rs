@@ -14,7 +14,10 @@ pub mod consts {
 
     /// GPS value of π (matches IS-GPS-200 exactly; slightly differs from
     /// `std::f64::consts::PI` but must be used for bit-accurate results).
-    #[expect(clippy::approx_constant, reason = "IS-GPS-200 mandates this exact value; must not be replaced with std::f64::consts::PI")]
+    #[expect(
+        clippy::approx_constant,
+        reason = "IS-GPS-200 mandates this exact value; must not be replaced with std::f64::consts::PI"
+    )]
     pub const GPS_PI: f64 = 3.141_592_653_589_8;
 
     /// Earth's rotation rate (rad/s), WGS-84.
@@ -100,7 +103,10 @@ impl GpsTime {
 
     /// Return `self − other` in seconds, handling week-boundary crossing.
     #[inline]
-    #[expect(clippy::should_implement_trait, reason = "returns f64, not Self; cannot implement Sub<GpsTime> for GpsTime here")]
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "returns f64, not Self; cannot implement Sub<GpsTime> for GpsTime here"
+    )]
     pub fn sub(self, other: Self) -> f64 {
         (self.week - other.week) as f64 * Self::SECS_PER_WEEK + (self.sec - other.sec)
     }
@@ -129,12 +135,12 @@ impl GpsTime {
 /// time uses [`GpsTime`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UtcDate {
-    pub year:  i32,
+    pub year: i32,
     pub month: u8,
-    pub day:   u8,
-    pub hour:  u8,
-    pub min:   u8,
-    pub sec:   f64,
+    pub day: u8,
+    pub hour: u8,
+    pub min: u8,
+    pub sec: f64,
 }
 
 impl UtcDate {
@@ -148,15 +154,18 @@ impl UtcDate {
         const DOY: [i32; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
 
         let yr = if self.year < 100 {
-            if self.year >= 80 { self.year + 1900 } else { self.year + 2000 }
+            if self.year >= 80 {
+                self.year + 1900
+            } else {
+                self.year + 2000
+            }
         } else {
             self.year
         };
 
-        let is_leap =
-            (yr % 4 == 0 && yr % 100 != 0) || yr % 400 == 0;
+        let is_leap = (yr % 4 == 0 && yr % 100 != 0) || yr % 400 == 0;
         let leap_bonus = i32::from(is_leap && self.month > 2);
-        let month_idx  = (self.month.saturating_sub(1)) as usize;
+        let month_idx = (self.month.saturating_sub(1)) as usize;
         let day_of_year = DOY.get(month_idx).copied().unwrap_or(0) + self.day as i32 + leap_bonus;
 
         // Days from GPS epoch (6 Jan 1980 = day 6 of 1980) to 1 Jan of `yr`.
@@ -196,15 +205,19 @@ impl Location {
     /// Construct from decimal degrees and metres.
     pub fn degrees(lat: f64, lon: f64, height_m: f64) -> Self {
         Self {
-            lat_rad:  lat.to_radians(),
-            lon_rad:  lon.to_radians(),
+            lat_rad: lat.to_radians(),
+            lon_rad: lon.to_radians(),
             height_m,
         }
     }
 
     /// Construct from radians and metres.
     pub fn radians(lat_rad: f64, lon_rad: f64, height_m: f64) -> Self {
-        Self { lat_rad, lon_rad, height_m }
+        Self {
+            lat_rad,
+            lon_rad,
+            height_m,
+        }
     }
 }
 

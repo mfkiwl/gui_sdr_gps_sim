@@ -85,8 +85,7 @@ pub fn scan_new_routes(umf_dir: &Path, existing: &[RouteEntry]) -> Vec<RouteEntr
             clippy::cast_precision_loss,
             reason = "line counts are small enough that f64 precision is sufficient"
         )]
-        let duration_s =
-            csv_text.lines().filter(|l| !l.trim().is_empty()).count() as f64 * 0.1;
+        let duration_s = csv_text.lines().filter(|l| !l.trim().is_empty()).count() as f64 * 0.1;
 
         let geojson_path = umf_dir.join(format!("{name}.geojson"));
         let distance_m = extract_distance(&geojson_path);

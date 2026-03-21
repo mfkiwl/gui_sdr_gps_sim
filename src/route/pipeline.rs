@@ -23,10 +23,9 @@ pub async fn run_pipeline(
     api_key: String,
     profile: String,
 ) -> Result<usize, String> {
-    let (lon, lat, ele, geojson_text) =
-        get_ors_route(route_points, api_key, &profile)
-            .await
-            .map_err(|e| e.to_string())?;
+    let (lon, lat, ele, geojson_text) = get_ors_route(route_points, api_key, &profile)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let segments = segmentize(&lon, &lat, &ele, velocity);
 
@@ -68,8 +67,8 @@ pub async fn run_pipeline_from_geojson(
     velocity: f64,
     route_name: String,
 ) -> Result<usize, String> {
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Read '{}': {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("Read '{}': {e}", path.display()))?;
 
     let json: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("Parse GeoJSON: {e}"))?;
@@ -117,7 +116,11 @@ pub async fn run_pipeline_from_geojson(
                     .and_then(serde_json::Value::as_f64)
                     .ok_or_else(|| "Coordinate missing latitude.".to_owned())?,
             );
-            ele.push(arr.get(2).and_then(serde_json::Value::as_f64).unwrap_or(0.0));
+            ele.push(
+                arr.get(2)
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0),
+            );
         }
     }
 

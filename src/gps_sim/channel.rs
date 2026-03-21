@@ -7,10 +7,13 @@
 //! - C/A code sequence (bipolar ±1)
 //! - Current data bit and code chip state
 
-use super::types::{Ephemeris, IonoUtc, GpsTime, consts::{CODE_FREQ_CA, SPEED_OF_LIGHT}};
 use super::codegen;
 use super::navmsg;
-use super::orbit::{compute_range, RangeResult};
+use super::orbit::{RangeResult, compute_range};
+use super::types::{
+    Ephemeris, GpsTime, IonoUtc,
+    consts::{CODE_FREQ_CA, SPEED_OF_LIGHT},
+};
 
 /// Simulation state for one tracked GPS satellite.
 ///
@@ -74,34 +77,34 @@ impl Channel {
     ///
     /// Returns `None` if the satellite is below the horizon at `grx`.
     pub fn new(
-        prn:      u8,
-        eph:      &Ephemeris,
-        iono:     &IonoUtc,
-        grx:      GpsTime,
-        rx_ecef:  [f64; 3],
+        prn: u8,
+        eph: &Ephemeris,
+        iono: &IonoUtc,
+        grx: GpsTime,
+        rx_ecef: [f64; 3],
     ) -> Option<Self> {
         // Check visibility and compute initial pseudorange.
         let rho = compute_range(eph, iono, grx, rx_ecef)?;
 
-        let ca  = codegen::to_bipolar(&codegen::generate(prn));
+        let ca = codegen::to_bipolar(&codegen::generate(prn));
         let sbf = navmsg::eph_to_subframes(eph, iono);
 
         let mut ch = Self {
             prn,
             ca,
             sbf,
-            f_carr:     0.0,
-            f_code:     CODE_FREQ_CA,
+            f_carr: 0.0,
+            f_code: CODE_FREQ_CA,
             carr_phase: 0.0,
             code_phase: 0.0,
-            iword:      0,
-            ibit:       0,
-            icode:      0,
-            data_bit:   1,
-            code_ca:    1,
-            dwrd:       [0u32; 60],
-            azel:       rho.azel,
-            ipage:      0,
+            iword: 0,
+            ibit: 0,
+            icode: 0,
+            data_bit: 1,
+            code_ca: 1,
+            dwrd: [0u32; 60],
+            azel: rho.azel,
+            ipage: 0,
         };
 
         // Initialise navigation message and code phase alignment.
@@ -131,9 +134,9 @@ impl Channel {
 
         // Navigation word/bit/code indices derived from elapsed ms.
         // 1 word = 30 bits × 20 ms = 600 ms.
-        self.iword  = (ims / 600).min(59);
-        self.ibit   = ((ims % 600) / 20).min(29);
-        self.icode  = (ims % 20).min(19);
+        self.iword = (ims / 600).min(59);
+        self.ibit = ((ims % 600) / 20).min(29);
+        self.icode = (ims % 20).min(19);
 
         // Extract current data bit from the nav word ring.
         let word = self.dwrd.get(self.iword).copied().unwrap_or(0);

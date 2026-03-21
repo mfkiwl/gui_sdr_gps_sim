@@ -5,9 +5,12 @@
 mod state;
 mod worker;
 
-#[expect(unused_imports, reason = "SimSatInfo is part of the public API, consumed by external callers reading SimState::satellites")]
-pub use state::{SimSettings, SimState, SimStatus, SimOutputType, SimSatInfo};
-pub use worker::{GPS_L1_HZ, GPS_SAMPLE_RATE_HZ, run, run_static_loop, run_interactive};
+#[expect(
+    unused_imports,
+    reason = "SimSatInfo is part of the public API, consumed by external callers reading SimState::satellites"
+)]
+pub use state::{SimOutputType, SimSatInfo, SimSettings, SimState, SimStatus};
+pub use worker::{GPS_L1_HZ, GPS_SAMPLE_RATE_HZ, run, run_interactive, run_static_loop};
 
 use std::{path::PathBuf, sync::mpsc, thread};
 

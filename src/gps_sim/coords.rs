@@ -12,7 +12,10 @@
 //! | NEU  | Local tangent plane: North, East, Up (metres) |
 //! | Az/El | Azimuth and elevation angles (radians) |
 
-use super::types::{Location, consts::{WGS84_A, WGS84_E}};
+use super::types::{
+    Location,
+    consts::{WGS84_A, WGS84_E},
+};
 
 /// Convert geodetic coordinates to ECEF Cartesian.
 ///
@@ -86,8 +89,8 @@ pub fn ltc_matrix(loc: Location) -> [[f64; 3]; 3] {
 
     [
         [-s_lat * c_lon, -s_lat * s_lon, c_lat], // North
-        [-s_lon,          c_lon,          0.0  ], // East
-        [ c_lat * c_lon,  c_lat * s_lon,  s_lat], // Up
+        [-s_lon, c_lon, 0.0],                    // East
+        [c_lat * c_lon, c_lat * s_lon, s_lat],   // Up
     ]
 }
 
@@ -99,7 +102,10 @@ pub fn ltc_matrix(loc: Location) -> [[f64; 3]; 3] {
 /// # Returns
 /// `[north_m, east_m, up_m]`.
 #[inline]
-#[expect(clippy::indexing_slicing, reason = "from_fn guarantees i<3; d and ltc[i] are fixed-size [f64;3]")]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "from_fn guarantees i<3; d and ltc[i] are fixed-size [f64;3]"
+)]
 pub fn ecef_to_neu(d: [f64; 3], ltc: [[f64; 3]; 3]) -> [f64; 3] {
     std::array::from_fn(|i| ltc[i][0] * d[0] + ltc[i][1] * d[1] + ltc[i][2] * d[2])
 }
@@ -130,8 +136,8 @@ mod tests {
         let loc = Location::degrees(52.3676, 4.9041, 5.0);
         let xyz = llh_to_ecef(loc);
         let back = ecef_to_llh(xyz);
-        assert_relative_eq!(loc.lat_rad,  back.lat_rad,  epsilon = 1e-10);
-        assert_relative_eq!(loc.lon_rad,  back.lon_rad,  epsilon = 1e-10);
+        assert_relative_eq!(loc.lat_rad, back.lat_rad, epsilon = 1e-10);
+        assert_relative_eq!(loc.lon_rad, back.lon_rad, epsilon = 1e-10);
         assert_relative_eq!(loc.height_m, back.height_m, epsilon = 1e-4);
     }
 

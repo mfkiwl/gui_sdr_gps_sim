@@ -15,9 +15,9 @@ pub fn parse_coords(input: &str) -> Result<Vec<f64>, Box<dyn std::error::Error>>
 ///
 /// Uses the WGS-84 ellipsoid. Returns `(X, Y, Z)` in metres.
 pub fn lla_to_ecef(lat: f64, lon: f64, alt: f64) -> (f64, f64, f64) {
-    const A: f64 = 6_378_137.0;           // WGS-84 semi-major axis (m)
+    const A: f64 = 6_378_137.0; // WGS-84 semi-major axis (m)
     const F: f64 = 1.0 / 298.257_223_563; // WGS-84 flattening
-    const E2: f64 = 2.0 * F - F * F;      // First eccentricity squared
+    const E2: f64 = 2.0 * F - F * F; // First eccentricity squared
 
     let lat_rad = lat.to_radians();
     let lon_rad = lon.to_radians();

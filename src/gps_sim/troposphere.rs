@@ -61,15 +61,18 @@ mod tests {
 
     #[test]
     fn delay_increases_at_low_elevation() {
-        let zen  = tropospheric_delay(90_f64.to_radians(), 0.0);
-        let low  = tropospheric_delay(10_f64.to_radians(), 0.0);
-        assert!(low > zen, "low elevation delay {low:.2} m should exceed zenith {zen:.2} m");
+        let zen = tropospheric_delay(90_f64.to_radians(), 0.0);
+        let low = tropospheric_delay(10_f64.to_radians(), 0.0);
+        assert!(
+            low > zen,
+            "low elevation delay {low:.2} m should exceed zenith {zen:.2} m"
+        );
     }
 
     #[test]
     fn delay_decreases_with_altitude() {
-        let sea   = tropospheric_delay(45_f64.to_radians(), 0.0);
-        let high  = tropospheric_delay(45_f64.to_radians(), 3000.0);
+        let sea = tropospheric_delay(45_f64.to_radians(), 0.0);
+        let high = tropospheric_delay(45_f64.to_radians(), 3000.0);
         assert!(high < sea, "high-altitude delay should be smaller");
     }
 

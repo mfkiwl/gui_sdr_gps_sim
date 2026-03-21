@@ -20,7 +20,7 @@ pub enum SimOutputType {
 #[derive(Clone, Debug)]
 pub struct SimSatInfo {
     /// PRN number (1–32).
-    pub prn:    u8,
+    pub prn: u8,
     /// Azimuth angle in degrees (0 = North, clockwise).
     pub az_deg: f64,
     /// Elevation angle in degrees above the horizon.

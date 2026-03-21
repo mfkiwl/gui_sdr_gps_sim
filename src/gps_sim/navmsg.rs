@@ -31,7 +31,7 @@
 //! - Row 2 → Subframe 3
 //! - Rows 3 + 2·p, 4 + 2·p (p = 0..25): SF4 page p+1, SF5 page p+1
 
-use super::types::{Ephemeris, IonoUtc, GpsTime, consts::GPS_PI};
+use super::types::{Ephemeris, GpsTime, IonoUtc, consts::GPS_PI};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -68,7 +68,11 @@ const PARITY_MASKS: [u32; 6] = [
 /// The 30-bit word with 6 parity bits appended in bits 5–0.
 pub fn compute_checksum(source: u32, d30_star: bool) -> u32 {
     // Complement data bits if D30* is set.
-    let d = if d30_star { source ^ 0x3FFF_FFC0 } else { source };
+    let d = if d30_star {
+        source ^ 0x3FFF_FFC0
+    } else {
+        source
+    };
 
     // Compute each parity bit as even-parity over the selected data bits.
     let parity: u32 = PARITY_MASKS
@@ -94,7 +98,10 @@ pub fn compute_checksum(source: u32, d30_star: bool) -> u32 {
 ///
 /// Parity bits and TOW values are **not** set here; they are injected per
 /// simulation step by [`generate_nav_msg`].
-#[expect(clippy::indexing_slicing, reason = "sbf rows/words indexed with literals (0..52, 0..9) and loop-bounded indices all within the [[u32;10];53] bounds; alpha/beta arrays are [f64;4]")]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "sbf rows/words indexed with literals (0..52, 0..9) and loop-bounded indices all within the [[u32;10];53] bounds; alpha/beta arrays are [f64;4]"
+)]
 pub fn eph_to_subframes(eph: &Ephemeris, iono: &IonoUtc) -> [[u32; 10]; 53] {
     let mut sbf = [[0u32; 10]; 53];
     let data_id: u32 = 1; // always 1 for GPS
@@ -112,33 +119,35 @@ pub fn eph_to_subframes(eph: &Ephemeris, iono: &IonoUtc) -> [[u32; 10]; 53] {
     sbf[0][2] = ((eph.toe.week as u32 & 0x3FF) << 20) // GPS week number (10 bits)
               | (2u32 << 12)                           // L2 code flag
               | pack(eph.sva as f64, 1.0, 4, 8)        // URA index
-              | pack(eph.svh as f64, 1.0, 6, 2);       // SV health
+              | pack(eph.svh as f64, 1.0, 6, 2); // SV health
     sbf[0][3] = pack(eph.iodc as f64, 1.0, 2, 22)     // IODC MSBs
               | pack(eph.tgd, f64::powi(2.0, -31), 8, 6); // group delay (s)
     sbf[0][4] = pack(eph.iodc as f64, 1.0, 8, 22)     // IODC LSBs
-              | pack(eph.toc.sec, 16.0, 16, 6);         // clock reference time
+              | pack(eph.toc.sec, 16.0, 16, 6); // clock reference time
     sbf[0][5] = pack(eph.af2, f64::powi(2.0, -55), 8, 22)  // clock drift rate
-              | pack(eph.af1, f64::powi(2.0, -43), 16, 6);  // clock drift
+              | pack(eph.af1, f64::powi(2.0, -43), 16, 6); // clock drift
     sbf[0][6] = pack(eph.af0, f64::powi(2.0, -31), 22, 8); // clock bias
     // Words 7–9: unused — fill with EMPTY_WORD pattern (24 data bits each).
-    for w in 7..=9 { sbf[0][w] = (EMPTY_WORD & 0x00FF_FFFF) << 6; }
+    for w in 7..=9 {
+        sbf[0][w] = (EMPTY_WORD & 0x00FF_FFFF) << 6;
+    }
 
     // ── Subframe 2: Ephemeris 1 ───────────────────────────────────────────────
     sbf[1][0] = PREAMBLE;
     sbf[1][1] = 0x2u32 << 8;
     sbf[1][2] = pack(eph.iode as f64, 1.0, 8, 22)           // IODE
-              | pack(eph.crs, f64::powi(2.0, -5), 16, 6);   // Crs (m)
+              | pack(eph.crs, f64::powi(2.0, -5), 16, 6); // Crs (m)
     sbf[1][3] = pack(eph.deltan / GPS_PI, f64::powi(2.0, -43), 16, 14) // Δn (rad/s)
-              | pack(eph.m0 / GPS_PI, f64::powi(2.0, -31), 8, 6);      // M0 MSBs
-    sbf[1][4] = pack(eph.m0 / GPS_PI, f64::powi(2.0, -31), 24, 6);    // M0 LSBs
+              | pack(eph.m0 / GPS_PI, f64::powi(2.0, -31), 8, 6); // M0 MSBs
+    sbf[1][4] = pack(eph.m0 / GPS_PI, f64::powi(2.0, -31), 24, 6); // M0 LSBs
     sbf[1][5] = pack(eph.cuc, f64::powi(2.0, -29), 16, 14) // Cuc (rad)
-              | pack(eph.ecc, f64::powi(2.0, -33), 8, 6);   // eccentricity MSBs
+              | pack(eph.ecc, f64::powi(2.0, -33), 8, 6); // eccentricity MSBs
     sbf[1][6] = pack(eph.ecc, f64::powi(2.0, -33), 24, 6); // eccentricity LSBs
     sbf[1][7] = pack(eph.cus, f64::powi(2.0, -29), 16, 14) // Cus (rad)
               | pack(eph.sqrta, f64::powi(2.0, -19), 8, 6); // √A MSBs
     sbf[1][8] = pack(eph.sqrta, f64::powi(2.0, -19), 24, 6); // √A LSBs
     sbf[1][9] = pack(eph.toe.sec, 16.0, 16, 14)              // TOE
-              | pack(eph.iodc as f64, 1.0, 5, 8);            // FIT/IODC LSB
+              | pack(eph.iodc as f64, 1.0, 5, 8); // FIT/IODC LSB
 
     // ── Subframe 3: Ephemeris 2 ───────────────────────────────────────────────
     sbf[2][0] = PREAMBLE;
@@ -147,14 +156,14 @@ pub fn eph_to_subframes(eph: &Ephemeris, iono: &IonoUtc) -> [[u32; 10]; 53] {
               | pack(eph.omg0 / GPS_PI, f64::powi(2.0, -31), 8, 6); // Ω0 MSBs
     sbf[2][3] = pack(eph.omg0 / GPS_PI, f64::powi(2.0, -31), 24, 6); // Ω0 LSBs
     sbf[2][4] = pack(eph.cis, f64::powi(2.0, -29), 16, 14)     // Cis (rad)
-              | pack(eph.inc0 / GPS_PI, f64::powi(2.0, -31), 8, 6);  // i0 MSBs
+              | pack(eph.inc0 / GPS_PI, f64::powi(2.0, -31), 8, 6); // i0 MSBs
     sbf[2][5] = pack(eph.inc0 / GPS_PI, f64::powi(2.0, -31), 24, 6); // i0 LSBs
     sbf[2][6] = pack(eph.crc, f64::powi(2.0, -5), 16, 14)      // Crc (m)
-              | pack(eph.aop / GPS_PI, f64::powi(2.0, -31), 8, 6);  // ω MSBs
+              | pack(eph.aop / GPS_PI, f64::powi(2.0, -31), 8, 6); // ω MSBs
     sbf[2][7] = pack(eph.aop / GPS_PI, f64::powi(2.0, -31), 24, 6); // ω LSBs
     sbf[2][8] = pack(eph.omgdot / GPS_PI, f64::powi(2.0, -43), 24, 6); // Ω̇ (rad/s)
     sbf[2][9] = pack(eph.iode as f64, 1.0, 8, 22)               // IODE
-              | pack(eph.idot / GPS_PI, f64::powi(2.0, -43), 14, 8);  // IDOT (rad/s)
+              | pack(eph.idot / GPS_PI, f64::powi(2.0, -43), 14, 8); // IDOT (rad/s)
 
     // ── Subframes 4 & 5: empty almanac pages ─────────────────────────────────
     // Each page pair occupies rows 3+2p (SF4) and 4+2p (SF5), p = 0..25.
@@ -165,7 +174,9 @@ pub fn eph_to_subframes(eph: &Ephemeris, iono: &IonoUtc) -> [[u32; 10]; 53] {
             // Word 2: dataId(2b) + svId(6b) + 16b EMPTY
             sbf[row][2] = (data_id << 28) | ((EMPTY_WORD & 0xFFFF) << 6);
             // Words 3–8: 24 data bits of EMPTY pattern each
-            for w in 3..=8 { sbf[row][w] = (EMPTY_WORD & 0x00FF_FFFF) << 6; }
+            for w in 3..=8 {
+                sbf[row][w] = (EMPTY_WORD & 0x00FF_FFFF) << 6;
+            }
             // Word 9: 22-bit EMPTY + 2 reserved bits
             sbf[row][9] = (EMPTY_WORD & 0x003F_FFFF) << 8;
         }
@@ -178,24 +189,32 @@ pub fn eph_to_subframes(eph: &Ephemeris, iono: &IonoUtc) -> [[u32; 10]; 53] {
         sbf[row][2] = (data_id << 28) | (18u32 << 22); // data ID + page ID
         // α₀–α₃: words 3–4 (IS-GPS-200 Table 20-X).
         // Scale: α₀ = 2^-30, α₁ = 2^-27, α₂ = 2^-24, α₃ = 2^-24 (s/semi-circle^n).
-        let scales_a = [f64::powi(2.0, -30), f64::powi(2.0, -27),
-                        f64::powi(2.0, -24), f64::powi(2.0, -24)];
-        let scales_b = [f64::powi(2.0,  11), f64::powi(2.0,  14),
-                        f64::powi(2.0,  16), f64::powi(2.0,  16)];
+        let scales_a = [
+            f64::powi(2.0, -30),
+            f64::powi(2.0, -27),
+            f64::powi(2.0, -24),
+            f64::powi(2.0, -24),
+        ];
+        let scales_b = [
+            f64::powi(2.0, 11),
+            f64::powi(2.0, 14),
+            f64::powi(2.0, 16),
+            f64::powi(2.0, 16),
+        ];
         sbf[row][3] = pack(iono.alpha[0], scales_a[0], 8, 22)
-                    | pack(iono.alpha[1], scales_a[1], 8, 14)
-                    | pack(iono.alpha[2], scales_a[2], 8, 6);
+            | pack(iono.alpha[1], scales_a[1], 8, 14)
+            | pack(iono.alpha[2], scales_a[2], 8, 6);
         sbf[row][4] = pack(iono.alpha[3], scales_a[3], 8, 22)
-                    | pack(iono.beta[0],  scales_b[0], 8, 14)
-                    | pack(iono.beta[1],  scales_b[1], 8, 6);
-        sbf[row][5] = pack(iono.beta[2], scales_b[2], 8, 22)
-                    | pack(iono.beta[3], scales_b[3], 8, 14);
+            | pack(iono.beta[0], scales_b[0], 8, 14)
+            | pack(iono.beta[1], scales_b[1], 8, 6);
+        sbf[row][5] =
+            pack(iono.beta[2], scales_b[2], 8, 22) | pack(iono.beta[3], scales_b[3], 8, 14);
         // A0, A1, tot, wnt — UTC parameters (IS-GPS-200 Table 20-IX).
         sbf[row][6] = pack(iono.a0, f64::powi(2.0, -30), 24, 6);
         sbf[row][7] = pack(iono.a1, f64::powi(2.0, -50), 24, 6);
         sbf[row][8] = ((iono.tot as u32 & 0xFF) << 22)
-                    | ((iono.wnt as u32 & 0xFF) << 14)
-                    | ((iono.dtls as u32 & 0xFF) << 6);
+            | ((iono.wnt as u32 & 0xFF) << 14)
+            | ((iono.dtls as u32 & 0xFF) << 6);
     }
 
     sbf
@@ -216,7 +235,10 @@ pub fn eph_to_subframes(eph: &Ephemeris, iono: &IonoUtc) -> [[u32; 10]; 53] {
 /// # Returns
 /// 60 decoded nav words (6 subframes × 10 words), ready for bit extraction:
 /// `bit = (dwrd[iword] >> (29 - ibit)) & 1`.
-#[expect(clippy::indexing_slicing, reason = "sbf[row][w]: row is in rows[] (max 4+2*24=52<53), w<10; dwrd[base+w]: base+w<60")]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "sbf[row][w]: row is in rows[] (max 4+2*24=52<53), w<10; dwrd[base+w]: base+w<60"
+)]
 pub fn generate_nav_msg(sbf: &[[u32; 10]; 53], grx: GpsTime, ipage: usize) -> [u32; 60] {
     let mut dwrd = [0u32; 60];
 
@@ -284,8 +306,11 @@ mod tests {
         let with_carry = compute_checksum(data, true);
         let without_carry = compute_checksum(data, false);
         // The parity should differ because data bits are complemented.
-        assert_ne!(with_carry & 0x3F, without_carry & 0x3F,
-            "D30* should change parity");
+        assert_ne!(
+            with_carry & 0x3F,
+            without_carry & 0x3F,
+            "D30* should change parity"
+        );
     }
 
     #[test]
@@ -293,7 +318,14 @@ mod tests {
         let eph = super::super::types::Ephemeris::default();
         let iono = super::super::types::IonoUtc::default();
         let sbf = eph_to_subframes(&eph, &iono);
-        let dwrd = generate_nav_msg(&sbf, GpsTime { week: 2300, sec: 0.0 }, 0);
+        let dwrd = generate_nav_msg(
+            &sbf,
+            GpsTime {
+                week: 2300,
+                sec: 0.0,
+            },
+            0,
+        );
         assert_eq!(dwrd.len(), 60);
         // Preamble should survive in word 0 (subframe 1 TLM word).
         // After checksum the top 8 data bits contain 0x8B.

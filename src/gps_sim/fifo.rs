@@ -24,8 +24,8 @@
 //!
 //! [`HACKRF_BUF_BYTES`]: super::types::consts::HACKRF_BUF_BYTES
 
-use crossbeam_channel::{bounded, Receiver, Sender};
 use super::types::consts::HACKRF_BUF_BYTES;
+use crossbeam_channel::{Receiver, Sender, bounded};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -98,7 +98,9 @@ impl IqProducer {
     /// if all `n_bufs` buffers are queued waiting for USB submission, the GPS
     /// thread pauses rather than allocating unbounded memory.
     pub fn acquire(&self) -> Box<[i8]> {
-        self.free_rx.recv().expect("FIFO free pool closed unexpectedly")
+        self.free_rx
+            .recv()
+            .expect("FIFO free pool closed unexpectedly")
     }
 
     /// Submit a filled buffer to the TX thread.
@@ -167,7 +169,10 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::indexing_slicing, reason = "indexing buf[0] in tests is safe; buffer is non-empty by construction")]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "indexing buf[0] in tests is safe; buffer is non-empty by construction"
+    )]
     fn roundtrip_multiple_buffers() {
         let n = 4;
         let fifo = IqFifo::new(n);

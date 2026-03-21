@@ -33,9 +33,9 @@ mod constants {
     pub const MHZ: u64 = 1_000_000;
     /// Available baseband filter bandwidths for the MAX2837 transceiver (Hz).
     pub const MAX2837: [u32; 17] = [
-        1_750_000, 2_500_000, 3_500_000, 5_000_000, 5_500_000, 6_000_000,
-        7_000_000, 8_000_000, 9_000_000, 10_000_000, 12_000_000, 14_000_000,
-        15_000_000, 20_000_000, 24_000_000, 28_000_000, 0,
+        1_750_000, 2_500_000, 3_500_000, 5_000_000, 5_500_000, 6_000_000, 7_000_000, 8_000_000,
+        9_000_000, 10_000_000, 12_000_000, 14_000_000, 15_000_000, 20_000_000, 24_000_000,
+        28_000_000, 0,
     ];
 }
 
@@ -44,65 +44,73 @@ mod constants {
 mod enums {
     /// Current operating mode of the `HackRF` device.
     #[derive(Debug)]
-    pub enum DeviceMode { Off, Tx, Rx }
+    pub enum DeviceMode {
+        Off,
+        Tx,
+        Rx,
+    }
 
     /// Transceiver operating mode sent via USB control request.
     #[repr(u8)]
     pub enum TransceiverMode {
-        Off        = 0,
-        Receive    = 1,
-        Transmit   = 2,
-        Ss         = 3,
+        Off = 0,
+        Receive = 1,
+        Transmit = 2,
+        Ss = 3,
         CpldUpdate = 4,
-        RxSweep    = 5,
+        RxSweep = 5,
     }
 
     impl From<TransceiverMode> for u16 {
-        fn from(m: TransceiverMode) -> Self { m as Self }
+        fn from(m: TransceiverMode) -> Self {
+            m as Self
+        }
     }
 
     /// USB vendor request codes for `HackRF` device operations.
     #[repr(u8)]
     pub enum Request {
-        SetTransceiverMode       = 1,
-        Max2837Write             = 2,
-        Max2837Read              = 3,
-        Si5351CWrite             = 4,
-        Si5351CRead              = 5,
-        SampleRateSet            = 6,
+        SetTransceiverMode = 1,
+        Max2837Write = 2,
+        Max2837Read = 3,
+        Si5351CWrite = 4,
+        Si5351CRead = 5,
+        SampleRateSet = 6,
         BasebandFilterBandwidthSet = 7,
-        Rffc5071Write            = 8,
-        Rffc5071Read             = 9,
-        SpiflashErase            = 10,
-        SpiflashWrite            = 11,
-        SpiflashRead             = 12,
-        BoardIdRead              = 14,
-        VersionStringRead        = 15,
-        SetFreq                  = 16,
-        AmpEnable                = 17,
-        BoardPartidSerialnoRead  = 18,
-        SetLnaGain               = 19,
-        SetVgaGain               = 20,
-        SetTxvgaGain             = 21,
-        AntennaEnable            = 23,
-        SetFreqExplicit          = 24,
-        UsbWcidVendorReq         = 25,
-        InitSweep                = 26,
-        OperacakeGetBoards       = 27,
-        OperacakeSetPorts        = 28,
-        SetHwSyncMode            = 29,
-        Reset                    = 30,
-        OperacakeSetRanges       = 31,
-        ClkoutEnable             = 32,
-        SpiflashStatus           = 33,
-        SpiflashClearStatus      = 34,
-        OperacakeGpioTest        = 35,
-        CpldChecksum             = 36,
-        UiEnable                 = 37,
+        Rffc5071Write = 8,
+        Rffc5071Read = 9,
+        SpiflashErase = 10,
+        SpiflashWrite = 11,
+        SpiflashRead = 12,
+        BoardIdRead = 14,
+        VersionStringRead = 15,
+        SetFreq = 16,
+        AmpEnable = 17,
+        BoardPartidSerialnoRead = 18,
+        SetLnaGain = 19,
+        SetVgaGain = 20,
+        SetTxvgaGain = 21,
+        AntennaEnable = 23,
+        SetFreqExplicit = 24,
+        UsbWcidVendorReq = 25,
+        InitSweep = 26,
+        OperacakeGetBoards = 27,
+        OperacakeSetPorts = 28,
+        SetHwSyncMode = 29,
+        Reset = 30,
+        OperacakeSetRanges = 31,
+        ClkoutEnable = 32,
+        SpiflashStatus = 33,
+        SpiflashClearStatus = 34,
+        OperacakeGpioTest = 35,
+        CpldChecksum = 36,
+        UiEnable = 37,
     }
 
     impl From<Request> for u8 {
-        fn from(r: Request) -> Self { r as Self }
+        fn from(r: Request) -> Self {
+            r as Self
+        }
     }
 }
 
@@ -135,8 +143,8 @@ pub enum HackrfError {
     #[error("Control transfer ({direction:?}): got {actual} B, expected {expected} B")]
     ControlTransfer {
         direction: nusb::transfer::Direction,
-        actual:    usize,
-        expected:  usize,
+        actual: usize,
+        expected: usize,
     },
 
     /// Byte-slice to fixed-size array conversion failed.
@@ -158,12 +166,16 @@ pub enum HackrfError {
 
 // ── HackRF device ─────────────────────────────────────────────────────────────
 
-use std::time::Duration;
-use nusb::{Device, DeviceInfo, Endpoint, Interface, MaybeFuture as _,
-           transfer::{ControlIn, ControlOut, ControlType, Recipient}};
-use constants::{HACKRF_USB_VID, HACKRF_ONE_USB_PID, HACKRF_TRANSFER_BUFFER_SIZE,
-                HACKRF_RX_ENDPOINT_ADDRESS, HACKRF_TX_ENDPOINT_ADDRESS, MHZ, MAX2837};
+use constants::{
+    HACKRF_ONE_USB_PID, HACKRF_RX_ENDPOINT_ADDRESS, HACKRF_TRANSFER_BUFFER_SIZE,
+    HACKRF_TX_ENDPOINT_ADDRESS, HACKRF_USB_VID, MAX2837, MHZ,
+};
 use enums::{DeviceMode, Request, TransceiverMode};
+use nusb::{
+    Device, DeviceInfo, Endpoint, Interface, MaybeFuture as _,
+    transfer::{ControlIn, ControlOut, ControlType, Recipient},
+};
+use std::time::Duration;
 
 /// Raw USB interface to a `HackRF` One.
 ///
@@ -171,16 +183,23 @@ use enums::{DeviceMode, Request, TransceiverMode};
 /// and TX/RX mode switching.  All operations are synchronous — they call
 /// `.wait()` on the underlying `nusb` futures.
 pub struct HackRF {
-    mode:           DeviceMode,
-    #[expect(unused, reason = "Device must be kept alive to hold the USB interface open; it is not directly accessed after open")]
-    device:         Device,
+    mode: DeviceMode,
+    #[expect(
+        unused,
+        reason = "Device must be kept alive to hold the USB interface open; it is not directly accessed after open"
+    )]
+    device: Device,
     device_version: u16,
-    interface:      Interface,
+    interface: Interface,
 }
 
 impl std::fmt::Debug for HackRF {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "HackRF {{ mode: {:?}, fw: {} }}", self.mode, self.device_version)
+        write!(
+            f,
+            "HackRF {{ mode: {:?}, fw: {} }}",
+            self.mode, self.device_version
+        )
     }
 }
 
@@ -191,12 +210,17 @@ impl HackRF {
     /// Returns [`HackrfError::InvalidDevice`] if no device is found,
     /// or [`HackrfError::Usb`] if the device cannot be opened.
     pub fn new_auto() -> Result<Self, HackrfError> {
-        let devices     = Self::list_devices()?;
-        let deviceinfo  = devices.first().ok_or(HackrfError::InvalidDevice)?;
+        let devices = Self::list_devices()?;
+        let deviceinfo = devices.first().ok_or(HackrfError::InvalidDevice)?;
         let device_version = deviceinfo.device_version();
-        let device      = deviceinfo.open().wait()?;
-        let interface   = device.claim_interface(0).wait()?;
-        Ok(Self { mode: DeviceMode::Off, device, device_version, interface })
+        let device = deviceinfo.open().wait()?;
+        let interface = device.claim_interface(0).wait()?;
+        Ok(Self {
+            mode: DeviceMode::Off,
+            device,
+            device_version,
+            interface,
+        })
     }
 
     /// Open a specific `HackRF` One by serial number.
@@ -205,17 +229,23 @@ impl HackRF {
     /// Returns [`HackrfError::InvalidSerialNumber`] if the serial is not found,
     /// or [`HackrfError::Usb`] if the device cannot be opened.
     pub fn new(serial_number: &dyn AsRef<str>) -> Result<Self, HackrfError> {
-        let devices    = Self::list_devices()?;
+        let devices = Self::list_devices()?;
         let deviceinfo = devices
             .iter()
-            .find(|d| d.serial_number().is_some_and(|sn| {
-                sn.eq_ignore_ascii_case(serial_number.as_ref())
-            }))
+            .find(|d| {
+                d.serial_number()
+                    .is_some_and(|sn| sn.eq_ignore_ascii_case(serial_number.as_ref()))
+            })
             .ok_or_else(|| HackrfError::InvalidSerialNumber(serial_number.as_ref().to_owned()))?;
         let device_version = deviceinfo.device_version();
-        let device     = deviceinfo.open().wait()?;
-        let interface  = device.claim_interface(0).wait()?;
-        Ok(Self { mode: DeviceMode::Off, device, device_version, interface })
+        let device = deviceinfo.open().wait()?;
+        let interface = device.claim_interface(0).wait()?;
+        Ok(Self {
+            mode: DeviceMode::Off,
+            device,
+            device_version,
+            interface,
+        })
     }
 
     /// List all connected `HackRF` One devices.
@@ -230,49 +260,68 @@ impl HackRF {
     }
 
     /// Maximum transfer unit for USB bulk transfers (262 144 bytes).
-    pub fn max_transmission_unit(&self) -> usize { HACKRF_TRANSFER_BUFFER_SIZE }
+    pub fn max_transmission_unit(&self) -> usize {
+        HACKRF_TRANSFER_BUFFER_SIZE
+    }
 
     fn check_api_version(&self, minimal: u16) -> Result<(), HackrfError> {
         if self.device_version >= minimal {
             Ok(())
         } else {
-            Err(HackrfError::VersionMismatch { device: self.device_version, minimal })
+            Err(HackrfError::VersionMismatch {
+                device: self.device_version,
+                minimal,
+            })
         }
     }
 
     /// Return the firmware version word.
-    pub fn device_version(&self) -> u16 { self.device_version }
+    pub fn device_version(&self) -> u16 {
+        self.device_version
+    }
 
     fn read_control<const N: u16>(
-        &self, request: Request, value: u16, index: u16,
+        &self,
+        request: Request,
+        value: u16,
+        index: u16,
     ) -> Result<Vec<u8>, HackrfError> {
-        Ok(self.interface.control_in(
-            ControlIn {
-                control_type: ControlType::Vendor,
-                recipient:    Recipient::Device,
-                request:      request.into(),
-                value,
-                index,
-                length: N,
-            },
-            Duration::from_secs(1),
-        ).wait()?)
+        Ok(self
+            .interface
+            .control_in(
+                ControlIn {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request: request.into(),
+                    value,
+                    index,
+                    length: N,
+                },
+                Duration::from_secs(1),
+            )
+            .wait()?)
     }
 
     fn write_control(
-        &self, request: Request, value: u16, index: u16, data: &[u8],
+        &self,
+        request: Request,
+        value: u16,
+        index: u16,
+        data: &[u8],
     ) -> Result<(), HackrfError> {
-        self.interface.control_out(
-            ControlOut {
-                control_type: ControlType::Vendor,
-                recipient:    Recipient::Device,
-                request:      request.into(),
-                value,
-                index,
-                data,
-            },
-            Duration::from_secs(1),
-        ).wait()?;
+        self.interface
+            .control_out(
+                ControlOut {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request: request.into(),
+                    value,
+                    index,
+                    data,
+                },
+                Duration::from_secs(1),
+            )
+            .wait()?;
         Ok(())
     }
 
@@ -292,17 +341,19 @@ impl HackRF {
     /// or [`HackrfError::TryFromSlice`] if the response is malformed.
     pub fn part_id_serial_read(self) -> Result<((u32, u32), String), HackrfError> {
         let data = self.read_control::<32>(Request::BoardPartidSerialnoRead, 0, 0)?;
-        let part_id_1 = data.get(0..4)
+        let part_id_1 = data
+            .get(0..4)
             .and_then(|s| s.try_into().ok())
             .map(u32::from_le_bytes)
             .unwrap_or(0);
-        let part_id_2 = data.get(4..8)
+        let part_id_2 = data
+            .get(4..8)
             .and_then(|s| s.try_into().ok())
             .map(u32::from_le_bytes)
             .unwrap_or(0);
         let mut serial = String::new();
         for i in 0..4 {
-            if let Some(slice) = data.get(8 + 4*i .. 12 + 4*i) {
+            if let Some(slice) = data.get(8 + 4 * i..12 + 4 * i) {
                 if let Ok(bytes) = <[u8; 4]>::try_from(slice) {
                     use std::fmt::Write as _;
                     write!(serial, "{:08x?}", u32::from_le_bytes(bytes))?;
@@ -354,14 +405,16 @@ impl HackRF {
     ///
     /// # Errors
     /// Returns [`HackrfError::Transfer`] if any USB control transfer fails.
-    pub fn set_sample_rate_manual(&mut self, freq_hz: u32, divider: u32) -> Result<(), HackrfError> {
+    pub fn set_sample_rate_manual(
+        &mut self,
+        freq_hz: u32,
+        divider: u32,
+    ) -> Result<(), HackrfError> {
         let mut bytes = [0u8; 8];
         bytes[0..4].copy_from_slice(&freq_hz.to_le_bytes());
         bytes[4..8].copy_from_slice(&divider.to_le_bytes());
         self.write_control(Request::SampleRateSet, 0, 0, &bytes)?;
-        let bw = compute_baseband_filter_bw(
-            (0.75 * freq_hz as f32 / divider as f32) as u32,
-        );
+        let bw = compute_baseband_filter_bw((0.75 * freq_hz as f32 / divider as f32) as u32);
         self.set_baseband_filter_bandwidth(bw)
     }
 
@@ -374,20 +427,24 @@ impl HackRF {
     /// Returns [`HackrfError::Transfer`] if any USB control transfer fails.
     pub fn set_sample_rate_auto(&mut self, freq: f64) -> Result<(), HackrfError> {
         const MAX_N: usize = 32;
-        let freq_frac  = 1.0 + freq.fract();
-        let mut acc    = 0u64;
-        let mut mult   = 1usize;
-        let exp        = ((freq.to_bits() >> 52) & 0x7FF) as i32 - 1023;
-        let mut mask   = (1u64 << 52) - 1;
+        let freq_frac = 1.0 + freq.fract();
+        let mut acc = 0u64;
+        let mut mult = 1usize;
+        let exp = ((freq.to_bits() >> 52) & 0x7FF) as i32 - 1023;
+        let mut mask = (1u64 << 52) - 1;
         let mut frac_b = freq_frac.to_bits();
         frac_b &= mask;
-        mask   &= !((1u64 << (exp + 4)) - 1);
+        mask &= !((1u64 << (exp + 4)) - 1);
         for ii in 1..=MAX_N {
             mult = ii;
             acc += frac_b;
-            if acc & mask == 0 || !acc & mask == 0 { break; }
+            if acc & mask == 0 || !acc & mask == 0 {
+                break;
+            }
         }
-        if mult == MAX_N { mult = 1; }
+        if mult == MAX_N {
+            mult = 1;
+        }
         let freq_hz = (freq * mult as f64).round() as u32;
         self.set_sample_rate_manual(freq_hz, mult as u32)
     }
@@ -397,9 +454,15 @@ impl HackRF {
     /// # Errors
     /// Returns [`HackrfError::Argument`] if `value > 47` or the device rejects it.
     pub fn set_txvga_gain(&mut self, value: u16) -> Result<(), HackrfError> {
-        if value > 47 { return Err(HackrfError::Argument); }
+        if value > 47 {
+            return Err(HackrfError::Argument);
+        }
         let buf = self.read_control::<1>(Request::SetTxvgaGain, 0, value)?;
-        if buf.first().copied().unwrap_or(0) == 0 { Err(HackrfError::Argument) } else { Ok(()) }
+        if buf.first().copied().unwrap_or(0) == 0 {
+            Err(HackrfError::Argument)
+        } else {
+            Ok(())
+        }
     }
 
     /// Set RX LNA gain (0–40 dB, stepped by 8).
@@ -407,9 +470,15 @@ impl HackRF {
     /// # Errors
     /// Returns [`HackrfError::Argument`] if `value > 40` or the device rejects it.
     pub fn set_lna_gain(&mut self, value: u16) -> Result<(), HackrfError> {
-        if value > 40 { return Err(HackrfError::Argument); }
+        if value > 40 {
+            return Err(HackrfError::Argument);
+        }
         let buf = self.read_control::<1>(Request::SetLnaGain, 0, value & !0x07)?;
-        if buf.first().copied().unwrap_or(0) == 0 { Err(HackrfError::Argument) } else { Ok(()) }
+        if buf.first().copied().unwrap_or(0) == 0 {
+            Err(HackrfError::Argument)
+        } else {
+            Ok(())
+        }
     }
 
     /// Set RX VGA gain (0–62 dB, stepped by 2).
@@ -417,9 +486,15 @@ impl HackRF {
     /// # Errors
     /// Returns [`HackrfError::Argument`] if `value > 62` or the device rejects it.
     pub fn set_vga_gain(&mut self, value: u16) -> Result<(), HackrfError> {
-        if value > 62 { return Err(HackrfError::Argument); }
+        if value > 62 {
+            return Err(HackrfError::Argument);
+        }
         let buf = self.read_control::<1>(Request::SetVgaGain, 0, value & !0b1)?;
-        if buf.first().copied().unwrap_or(0) == 0 { Err(HackrfError::Argument) } else { Ok(()) }
+        if buf.first().copied().unwrap_or(0) == 0 {
+            Err(HackrfError::Argument)
+        } else {
+            Ok(())
+        }
     }
 
     /// Enable or disable the antenna port power supply.
@@ -476,7 +551,9 @@ impl HackRF {
     ///
     /// # Errors
     /// Returns [`HackrfError::Transfer`] if the endpoint cannot be claimed.
-    pub fn rx_queue(&mut self) -> Result<Endpoint<nusb::transfer::Bulk, nusb::transfer::In>, HackrfError> {
+    pub fn rx_queue(
+        &mut self,
+    ) -> Result<Endpoint<nusb::transfer::Bulk, nusb::transfer::In>, HackrfError> {
         Ok(self.interface.endpoint(HACKRF_RX_ENDPOINT_ADDRESS)?)
     }
 
@@ -484,7 +561,9 @@ impl HackRF {
     ///
     /// # Errors
     /// Returns [`HackrfError::Transfer`] if the endpoint cannot be claimed.
-    pub fn tx_queue(&mut self) -> Result<Endpoint<nusb::transfer::Bulk, nusb::transfer::Out>, HackrfError> {
+    pub fn tx_queue(
+        &mut self,
+    ) -> Result<Endpoint<nusb::transfer::Bulk, nusb::transfer::Out>, HackrfError> {
         Ok(self.interface.endpoint(HACKRF_TX_ENDPOINT_ADDRESS)?)
     }
 
@@ -524,7 +603,7 @@ impl HackRF {
 /// Encode a frequency in Hz as the 8-byte `[freq_mhz_le, freq_hz_le]` payload.
 fn freq_params(hz: u64) -> [u8; 8] {
     let mhz = (hz / MHZ) as u32;
-    let rem  = (hz % MHZ) as u32;
+    let rem = (hz % MHZ) as u32;
     let mut b = [0u8; 8];
     b[0..4].copy_from_slice(&mhz.to_le_bytes());
     b[4..8].copy_from_slice(&rem.to_le_bytes());
@@ -533,10 +612,14 @@ fn freq_params(hz: u64) -> [u8; 8] {
 
 /// Select the largest MAX2837 bandwidth ≤ `bandwidth_hz`.
 fn compute_baseband_filter_bw(bandwidth_hz: u32) -> u32 {
-    let mut p  = 0u32;
+    let mut p = 0u32;
     let mut ix = 0usize;
     for (i, &v) in MAX2837.iter().enumerate() {
-        if v >= bandwidth_hz { p = v; ix = i; break; }
+        if v >= bandwidth_hz {
+            p = v;
+            ix = i;
+            break;
+        }
     }
     if ix != 0 && p > bandwidth_hz {
         p = MAX2837.get(ix - 1).copied().unwrap_or(0);
@@ -563,7 +646,9 @@ impl GpsHackRf {
     /// # Errors
     /// Returns [`SimError::HackRf`] if no device is found or USB fails.
     pub fn open() -> Result<Self, SimError> {
-        Ok(Self { inner: HackRF::new_auto()? })
+        Ok(Self {
+            inner: HackRF::new_auto()?,
+        })
     }
 
     /// Configure the `HackRF` for GPS L1 transmission.
@@ -583,17 +668,17 @@ impl GpsHackRf {
     /// Returns [`SimError::HackRf`] if any USB control transfer fails.
     pub fn configure(
         &mut self,
-        gain_db:         i32,
-        amp:             bool,
-        ppb:             i32,
-        sample_rate:     Option<f64>,
-        center_freq:     Option<u64>,
+        gain_db: i32,
+        amp: bool,
+        ppb: i32,
+        sample_rate: Option<f64>,
+        center_freq: Option<u64>,
         baseband_filter: Option<u32>,
     ) -> Result<(), SimError> {
         const BASE_HZ: u64 = 1_575_420_000;
-        let center     = center_freq.unwrap_or(BASE_HZ);
+        let center = center_freq.unwrap_or(BASE_HZ);
         let correction = (center as f64 * ppb as f64 / 1_000_000_000.0) as i64;
-        let freq_hz    = (center as i64 - correction) as u64;
+        let freq_hz = (center as i64 - correction) as u64;
 
         self.inner.set_freq(freq_hz)?;
         let rate = sample_rate.unwrap_or(SAMPLE_RATE);

@@ -82,8 +82,7 @@ pub(crate) fn blocking_download(doy: u32, year: u32) -> Result<PathBuf, String> 
     log::info!("Connecting to CDDIS FTPS for {gz_name}");
 
     // Build the TLS connector — `native_tls` is re-exported by `suppaftp`.
-    let native = suppaftp::native_tls::TlsConnector::new()
-        .map_err(|e| format!("TLS init: {e}"))?;
+    let native = suppaftp::native_tls::TlsConnector::new().map_err(|e| format!("TLS init: {e}"))?;
     let connector = NativeTlsConnector::from(native);
 
     // Resolve DNS before connecting so we can use connect_timeout.
@@ -139,4 +138,3 @@ pub(crate) fn blocking_download(doy: u32, year: u32) -> Result<PathBuf, String> 
     log::info!("RINEX written to {}", out_path.display());
     Ok(out_path)
 }
-

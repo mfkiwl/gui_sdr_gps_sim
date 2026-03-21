@@ -34,13 +34,15 @@ impl Plugin for ClickCapturePlugin<'_> {
         if response.clicked_by(egui::PointerButton::Primary) {
             if let Some(screen_pos) = response.interact_pointer_pos() {
                 // Don't capture clicks inside the zoom-button overlay area (top-left corner).
-                let zoom_rect =
-                    egui::Rect::from_min_size(response.rect.min, ZOOM_WIDGET_EXCLUSION);
+                let zoom_rect = egui::Rect::from_min_size(response.rect.min, ZOOM_WIDGET_EXCLUSION);
                 if zoom_rect.contains(screen_pos) {
                     return;
                 }
                 let position = projector.unproject(screen_pos.to_vec2());
-                *self.out = Some(ClickResult { position, screen_pos });
+                *self.out = Some(ClickResult {
+                    position,
+                    screen_pos,
+                });
             }
         }
     }
@@ -178,10 +180,8 @@ impl Plugin for EditableRoutePlugin<'_> {
         let mut pointer_on_vertex = false;
 
         for (i, &pos) in screen_pts.iter().enumerate() {
-            let rect = egui::Rect::from_center_size(
-                pos,
-                egui::vec2(HIT_RADIUS * 2.0, HIT_RADIUS * 2.0),
-            );
+            let rect =
+                egui::Rect::from_center_size(pos, egui::vec2(HIT_RADIUS * 2.0, HIT_RADIUS * 2.0));
             let id = response.id.with(("edit_v", i));
             let vr = ui.interact(rect, id, egui::Sense::drag());
 
@@ -217,8 +217,7 @@ impl Plugin for EditableRoutePlugin<'_> {
         // Click: insert along the nearest segment, or append if no segment is near.
         if response.clicked_by(egui::PointerButton::Primary) && !pointer_on_vertex {
             if let Some(screen_pos) = response.interact_pointer_pos() {
-                let zoom_rect =
-                    egui::Rect::from_min_size(response.rect.min, ZOOM_WIDGET_EXCLUSION);
+                let zoom_rect = egui::Rect::from_min_size(response.rect.min, ZOOM_WIDGET_EXCLUSION);
                 if !zoom_rect.contains(screen_pos) {
                     let geo_pos = projector.unproject(screen_pos.to_vec2());
                     match nearest_segment_idx(&screen_pts, screen_pos, SEGMENT_HIT_DIST) {
