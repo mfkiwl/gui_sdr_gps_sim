@@ -28,7 +28,8 @@
       "WebFetch(domain:wiki.gnuradio.org)",
       "WebFetch(domain:www.gnuradio.org)",
       "Bash(ls -la /e/Projecten/gui_sdr_gps_sim/*.html)",
-      "Bash(grep -r -i \"wasm\\\\|trunk\" /e/Projecten/gui_sdr_gps_sim/*.toml /e/Projecten/gui_sdr_gps_sim/*.md /e/Projecten/gui_sdr_gps_sim/*.sh)"
+      "Bash(grep -r -i \"wasm\\\\|trunk\" /e/Projecten/gui_sdr_gps_sim/*.toml /e/Projecten/gui_sdr_gps_sim/*.md /e/Projecten/gui_sdr_gps_sim/*.sh)",
+      "Bash(curl -s https://www.gnu.org/licenses/gpl-3.0.txt -o LICENSE)"
     ]
   }
 }
