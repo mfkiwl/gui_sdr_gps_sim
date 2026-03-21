@@ -3,7 +3,8 @@ name = "gui_sdr_gps_sim"
 version = "0.1.0"
 authors = ["Okiedocus"]
 edition = "2024"
-include = ["LICENSE-APACHE", "LICENSE-MIT", "**/*.rs", "Cargo.toml"]
+include = ["LICENSE", "**/*.rs", "Cargo.toml"]
+license = "GPL-3.0-or-later"
 rust-version = "1.88"
 
 [package.metadata.docs.rs]

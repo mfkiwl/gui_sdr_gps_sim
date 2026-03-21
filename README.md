@@ -504,4 +504,4 @@ cargo test --workspace --all-targets --all-features                     # tests
 
 ## License
 
-Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT) at your option.
+Licensed under the [GNU General Public License v3.0 or later](LICENSE) (`GPL-3.0-or-later`).
