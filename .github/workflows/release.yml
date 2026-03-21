@@ -27,7 +27,7 @@ jobs:
             binary: gui_sdr_gps_sim
             archive: gui_sdr_gps_sim-linux-x86_64.tar.gz
 
-          - os: macos-13          # Intel runner
+          - os: macos-latest      # cross-compile Intel from Apple Silicon runner
             target: x86_64-apple-darwin
             binary: gui_sdr_gps_sim
             archive: gui_sdr_gps_sim-macos-x86_64.tar.gz
