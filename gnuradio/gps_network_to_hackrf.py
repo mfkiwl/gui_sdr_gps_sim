@@ -69,7 +69,7 @@ class gps_network_to_hackrf(gr.top_block, Qt.QWidget):
         ##################################################
         self.udp_port = udp_port = 4567
         self.tx_gain = tx_gain = 20
-        self.tcp_port = tcp_port = 4568
+        self.tcp_port = tcp_port = 4567
         self.tcp_addr = tcp_addr = "127.0.0.1"
         self.samp_rate = samp_rate = 3000000
         self.fft_avg = fft_avg = 0.1
@@ -118,7 +118,7 @@ class gps_network_to_hackrf(gr.top_block, Qt.QWidget):
             None # parent
         )
         self.qtgui_waterfall_sink_x_0.set_update_time(0.05)
-        self.qtgui_waterfall_sink_x_0.enable_grid(False)
+        self.qtgui_waterfall_sink_x_0.enable_grid(True)
         self.qtgui_waterfall_sink_x_0.enable_axis_labels(True)
 
 
@@ -138,7 +138,7 @@ class gps_network_to_hackrf(gr.top_block, Qt.QWidget):
             self.qtgui_waterfall_sink_x_0.set_color_map(i, colors[i])
             self.qtgui_waterfall_sink_x_0.set_line_alpha(i, alphas[i])
 
-        self.qtgui_waterfall_sink_x_0.set_intensity_range(-120, -40)
+        self.qtgui_waterfall_sink_x_0.set_intensity_range(-40, 40)
 
         self._qtgui_waterfall_sink_x_0_win = sip.wrapinstance(self.qtgui_waterfall_sink_x_0.qwidget(), Qt.QWidget)
 
@@ -207,12 +207,12 @@ class gps_network_to_hackrf(gr.top_block, Qt.QWidget):
         self.qtgui_freq_sink_x_0.set_y_axis((-120), (-40))
         self.qtgui_freq_sink_x_0.set_y_label('GPS L1 C/A Spectrum', 'dB')
         self.qtgui_freq_sink_x_0.set_trigger_mode(qtgui.TRIG_MODE_FREE, 0.0, 0, "")
-        self.qtgui_freq_sink_x_0.enable_autoscale(False)
+        self.qtgui_freq_sink_x_0.enable_autoscale(True)
         self.qtgui_freq_sink_x_0.enable_grid(True)
         self.qtgui_freq_sink_x_0.set_fft_average(1.0)
         self.qtgui_freq_sink_x_0.enable_axis_labels(True)
         self.qtgui_freq_sink_x_0.enable_control_panel(False)
-        self.qtgui_freq_sink_x_0.set_fft_window_normalized(False)
+        self.qtgui_freq_sink_x_0.set_fft_window_normalized(True)
 
 
 
@@ -246,7 +246,7 @@ class gps_network_to_hackrf(gr.top_block, Qt.QWidget):
         self.qtgui_const_sink_x_0.set_y_axis((-1.5), 1.5)
         self.qtgui_const_sink_x_0.set_x_axis((-1.5), 1.5)
         self.qtgui_const_sink_x_0.set_trigger_mode(qtgui.TRIG_MODE_FREE, qtgui.TRIG_SLOPE_POS, 0, 0, "")
-        self.qtgui_const_sink_x_0.enable_autoscale(False)
+        self.qtgui_const_sink_x_0.enable_autoscale(True)
         self.qtgui_const_sink_x_0.enable_grid(True)
         self.qtgui_const_sink_x_0.enable_axis_labels(True)
 
@@ -281,13 +281,13 @@ class gps_network_to_hackrf(gr.top_block, Qt.QWidget):
             args="numchan=" + str(1) + " " + 'hackrf=0'
         )
         self.osmosdr_sink_0.set_sample_rate(samp_rate)
-        self.osmosdr_sink_0.set_center_freq(100e6, 0)
+        self.osmosdr_sink_0.set_center_freq(1575.42e6, 0)
         self.osmosdr_sink_0.set_freq_corr(0, 0)
         self.osmosdr_sink_0.set_gain(0, 0)
         self.osmosdr_sink_0.set_if_gain(tx_gain, 0)
         self.osmosdr_sink_0.set_bb_gain(0, 0)
         self.osmosdr_sink_0.set_antenna('', 0)
-        self.osmosdr_sink_0.set_bandwidth(0, 0)
+        self.osmosdr_sink_0.set_bandwidth(3000000, 0)
         self.network_udp_source_0 = network.udp_source(gr.sizeof_char, 1, udp_port, 0, 32768, False, False, False)
         self._fft_avg_range = qtgui.Range(0.01, 1.0, 0.01, 0.1, 200)
         self._fft_avg_win = qtgui.RangeWidget(self._fft_avg_range, self.set_fft_avg, "FFT Average alpha", "counter_slider", float, QtCore.Qt.Horizontal)
@@ -346,10 +346,10 @@ class gps_network_to_hackrf(gr.top_block, Qt.QWidget):
 
     def set_samp_rate(self, samp_rate):
         self.samp_rate = samp_rate
-        self.qtgui_freq_sink_x_0.set_frequency_range(self.center_freq, self.samp_rate)
-        self.qtgui_waterfall_sink_x_0.set_frequency_range(self.center_freq, self.samp_rate)
-        self.qtgui_time_sink_x_0.set_samp_rate(self.samp_rate/100)
         self.osmosdr_sink_0.set_sample_rate(self.samp_rate)
+        self.qtgui_freq_sink_x_0.set_frequency_range(self.center_freq, self.samp_rate)
+        self.qtgui_time_sink_x_0.set_samp_rate(self.samp_rate/100)
+        self.qtgui_waterfall_sink_x_0.set_frequency_range(self.center_freq, self.samp_rate)
 
     def get_fft_avg(self):
         return self.fft_avg

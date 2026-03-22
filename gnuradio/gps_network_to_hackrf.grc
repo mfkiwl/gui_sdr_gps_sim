@@ -1,7 +1,3 @@
-metadata:
-  file_format: 1
-  grc_version: 3.10.9.2
-
 options:
   parameters:
     author: gui_sdr_gps_sim
@@ -38,9 +34,6 @@ options:
     state: enabled
 
 blocks:
-
-# ── Variables ──────────────────────────────────────────────────────────────────
-
 - name: center_freq
   id: variable
   parameters:
@@ -53,7 +46,27 @@ blocks:
     coordinate: [200, 8]
     rotation: 0
     state: enabled
-
+- name: fft_avg
+  id: variable_qtgui_range
+  parameters:
+    comment: FFT time-average (0=freeze 1=live)
+    gui_hint: ''
+    label: FFT Average alpha
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '0.01'
+    step: '0.01'
+    stop: '1.0'
+    value: '0.1'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1736, 16.0]
+    rotation: 0
+    state: enabled
 - name: samp_rate
   id: variable
   parameters:
@@ -66,7 +79,6 @@ blocks:
     coordinate: [360, 8]
     rotation: 0
     state: enabled
-
 - name: tcp_addr
   id: variable
   parameters:
@@ -79,12 +91,11 @@ blocks:
     coordinate: [520, 8]
     rotation: 0
     state: enabled
-
 - name: tcp_port
   id: variable
   parameters:
     comment: Port set in app TCP output setting
-    value: '4568'
+    value: '4567'
   states:
     bus_sink: false
     bus_source: false
@@ -92,20 +103,6 @@ blocks:
     coordinate: [680, 8]
     rotation: 0
     state: enabled
-
-- name: udp_port
-  id: variable
-  parameters:
-    comment: Port GR listens on (set app UDP address to 127.0.0.1:this_port)
-    value: '4567'
-  states:
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [840, 8]
-    rotation: 0
-    state: enabled
-
 - name: tx_gain
   id: variable_qtgui_range
   parameters:
@@ -127,93 +124,18 @@ blocks:
     coordinate: [1000, 8]
     rotation: 0
     state: enabled
-
-- name: fft_avg
-  id: variable_qtgui_range
+- name: udp_port
+  id: variable
   parameters:
-    comment: FFT time-average (0=freeze 1=live)
-    gui_hint: ''
-    label: FFT Average alpha
-    min_len: '200'
-    orient: QtCore.Qt.Horizontal
-    rangeType: float
-    start: '0.01'
-    step: '0.01'
-    stop: '1.0'
-    value: '0.1'
-    widget: counter_slider
+    comment: Port GR listens on (set app UDP address to 127.0.0.1:this_port)
+    value: '4567'
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [200, 80]
+    coordinate: [840, 8]
     rotation: 0
     state: enabled
-
-# ── Source: TCP (default) ──────────────────────────────────────────────────────
-# App is TCP SERVER — GR connects as client.
-# In the app: Output = TCP, port = tcp_port variable above.
-# To switch to UDP: disable this block and enable network_udp_source_0 below,
-# then re-wire its output to blocks_interleaved_char_to_complex_0 input.
-
-- name: network_tcp_source_0
-  id: network_tcp_source
-  parameters:
-    affinity: ''
-    alias: ''
-    comment: "TCP client \u2014 connects to app TCP server.\nApp setting: Output\
-      \ = TCP, port = 4568."
-    maxoutbuf: '0'
-    minoutbuf: '0'
-    notifyMissed: 'False'
-    addr: tcp_addr
-    port: tcp_port
-    server: 'False'
-    type: byte
-    vlen: '1'
-  states:
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [8, 220]
-    rotation: 0
-    state: disabled
-
-# ── Source: UDP (enabled by default) ──────────────────────────────────────────
-# To use: disable TCP source above, enable this block,
-# then connect its output to blocks_interleaved_char_to_complex_0 input (port 0).
-# App setting: Output = UDP, destination = 127.0.0.1:4567
-
-- name: network_udp_source_0
-  id: network_udp_source
-  parameters:
-    affinity: ''
-    alias: ''
-    comment: "UDP source \u2014 GR listens, app sends datagrams.\nApp setting: Output\
-      \ = UDP, destination = 127.0.0.1:4567.\nDisabled by default \u2014 enable\
-      \ and disable TCP source to switch."
-    header: '0'
-    ipv6: 'False'
-    maxoutbuf: '0'
-    minoutbuf: '0'
-    notify_missed: 'False'
-    payloadsize: '32768'
-    port: udp_port
-    src_zeros: 'False'
-    type: byte
-    vlen: '1'
-  states:
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [8, 340]
-    rotation: 0
-    state: enabled
-
-# ── i8 bytes to complex float ──────────────────────────────────────────────────
-# Converts interleaved signed-byte IQ [I0,Q0,I1,Q1,...] to complex<float>.
-# scale_factor=1/128 normalises the i8 range (-128..127) to +-1.0.
-
 - name: blocks_interleaved_char_to_complex_0
   id: blocks_interleaved_char_to_complex
   parameters:
@@ -232,90 +154,6 @@ blocks:
     coordinate: [300, 244]
     rotation: 0
     state: enabled
-
-# ── FFT Spectrum sink ──────────────────────────────────────────────────────────
-
-- name: qtgui_freq_sink_x_0
-  id: qtgui_freq_sink_x
-  parameters:
-    affinity: ''
-    alias: ''
-    alpha1: '1.0'
-    autoscale: 'False'
-    average: fft_avg
-    axislabels: 'True'
-    bw: samp_rate
-    color1: '"cyan"'
-    comment: GPS L1 C/A appears as a 2 MHz wide noise hump at 1575.42 MHz
-    ctrlpanel: 'False'
-    fc: center_freq
-    fftsize: '4096'
-    freqhalf: 'True'
-    grid: 'True'
-    gui_hint: tabs@0
-    label: GPS L1 C/A Spectrum
-    label1: IQ stream
-    legend: 'True'
-    maxoutbuf: '0'
-    minoutbuf: '0'
-    name: '"GPS L1 C/A \u2014 FFT Spectrum"'
-    nconnections: '1'
-    norm_window: 'False'
-    showports: 'False'
-    type: complex
-    update_time: '0.05'
-    width1: '1'
-    wintype: window.WIN_BLACKMAN_hARRIS
-    ymax: '-40'
-    ymin: '-120'
-  states:
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [620, 140]
-    rotation: 0
-    state: enabled
-
-# ── Waterfall sink ─────────────────────────────────────────────────────────────
-
-- name: qtgui_waterfall_sink_x_0
-  id: qtgui_waterfall_sink_x
-  parameters:
-    affinity: ''
-    alias: ''
-    alpha1: '1.0'
-    axislabels: 'True'
-    bw: samp_rate
-    color1: '0'
-    comment: Time vs frequency heatmap
-    fc: center_freq
-    fftsize: '4096'
-    freqhalf: 'True'
-    grid: 'False'
-    gui_hint: tabs@1
-    int_max: '-40'
-    int_min: '-120'
-    label: ''
-    label1: ''
-    legend: 'True'
-    maxoutbuf: '0'
-    minoutbuf: '0'
-    name: '"GPS L1 C/A \u2014 Waterfall"'
-    nconnections: '1'
-    showports: 'False'
-    type: complex
-    update_time: '0.05'
-    wintype: window.WIN_BLACKMAN_hARRIS
-  states:
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [620, 260]
-    rotation: 0
-    state: enabled
-
-# ── Decimator (3 MSPS -> 30 ksps) ─────────────────────────────────────────────
-
 - name: blocks_keep_one_in_n_0
   id: blocks_keep_one_in_n
   parameters:
@@ -331,42 +169,559 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [460, 380]
+    coordinate: [584, 704.0]
     rotation: 0
     state: enabled
-
-# ── Time domain sink ───────────────────────────────────────────────────────────
-
+- name: network_tcp_source_0
+  id: network_tcp_source
+  parameters:
+    addr: tcp_addr
+    affinity: ''
+    alias: ''
+    comment: "TCP client \u2014 connects to app TCP server.\nApp setting: Output =\
+      \ TCP, port = 4567."
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    port: tcp_port
+    server: 'False'
+    type: byte
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 220]
+    rotation: 0
+    state: disabled
+- name: network_udp_source_0
+  id: network_udp_source
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: "UDP source \u2014 GR listens, app sends datagrams.\nApp setting: Output\
+      \ = UDP, destination = 127.0.0.1:4567.\nDisabled by default \u2014 enable and\
+      \ disable TCP source to switch."
+    header: '0'
+    ipv6: 'False'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    notify_missed: 'False'
+    payloadsize: '32768'
+    port: udp_port
+    src_zeros: 'False'
+    type: byte
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 340]
+    rotation: 0
+    state: enabled
+- name: osmosdr_sink_0
+  id: osmosdr_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    ant0: ''
+    ant1: ''
+    ant10: ''
+    ant11: ''
+    ant12: ''
+    ant13: ''
+    ant14: ''
+    ant15: ''
+    ant16: ''
+    ant17: ''
+    ant18: ''
+    ant19: ''
+    ant2: ''
+    ant20: ''
+    ant21: ''
+    ant22: ''
+    ant23: ''
+    ant24: ''
+    ant25: ''
+    ant26: ''
+    ant27: ''
+    ant28: ''
+    ant29: ''
+    ant3: ''
+    ant30: ''
+    ant31: ''
+    ant4: ''
+    ant5: ''
+    ant6: ''
+    ant7: ''
+    ant8: ''
+    ant9: ''
+    args: hackrf=0
+    bb_gain0: '0'
+    bb_gain1: '20'
+    bb_gain10: '20'
+    bb_gain11: '20'
+    bb_gain12: '20'
+    bb_gain13: '20'
+    bb_gain14: '20'
+    bb_gain15: '20'
+    bb_gain16: '20'
+    bb_gain17: '20'
+    bb_gain18: '20'
+    bb_gain19: '20'
+    bb_gain2: '20'
+    bb_gain20: '20'
+    bb_gain21: '20'
+    bb_gain22: '20'
+    bb_gain23: '20'
+    bb_gain24: '20'
+    bb_gain25: '20'
+    bb_gain26: '20'
+    bb_gain27: '20'
+    bb_gain28: '20'
+    bb_gain29: '20'
+    bb_gain3: '20'
+    bb_gain30: '20'
+    bb_gain31: '20'
+    bb_gain4: '20'
+    bb_gain5: '20'
+    bb_gain6: '20'
+    bb_gain7: '20'
+    bb_gain8: '20'
+    bb_gain9: '20'
+    bw0: '3000000'
+    bw1: '0'
+    bw10: '0'
+    bw11: '0'
+    bw12: '0'
+    bw13: '0'
+    bw14: '0'
+    bw15: '0'
+    bw16: '0'
+    bw17: '0'
+    bw18: '0'
+    bw19: '0'
+    bw2: '0'
+    bw20: '0'
+    bw21: '0'
+    bw22: '0'
+    bw23: '0'
+    bw24: '0'
+    bw25: '0'
+    bw26: '0'
+    bw27: '0'
+    bw28: '0'
+    bw29: '0'
+    bw3: '0'
+    bw30: '0'
+    bw31: '0'
+    bw4: '0'
+    bw5: '0'
+    bw6: '0'
+    bw7: '0'
+    bw8: '0'
+    bw9: '0'
+    clock_source0: ''
+    clock_source1: ''
+    clock_source2: ''
+    clock_source3: ''
+    clock_source4: ''
+    clock_source5: ''
+    clock_source6: ''
+    clock_source7: ''
+    comment: "HackRF One TX @ GPS L1 1575.42 MHz.\nif_gain0 = tx_gain slider (TX VGA,\
+      \ 0\u201347 dB).\ngain0 = 0 (amp off) or 14 (amp on).\nNOTE: GRC osmosdr template\
+      \ may hardcode 100 MHz \u2014 the generated .py fixes this to center_freq."
+    corr0: '0'
+    corr1: '0'
+    corr10: '0'
+    corr11: '0'
+    corr12: '0'
+    corr13: '0'
+    corr14: '0'
+    corr15: '0'
+    corr16: '0'
+    corr17: '0'
+    corr18: '0'
+    corr19: '0'
+    corr2: '0'
+    corr20: '0'
+    corr21: '0'
+    corr22: '0'
+    corr23: '0'
+    corr24: '0'
+    corr25: '0'
+    corr26: '0'
+    corr27: '0'
+    corr28: '0'
+    corr29: '0'
+    corr3: '0'
+    corr30: '0'
+    corr31: '0'
+    corr4: '0'
+    corr5: '0'
+    corr6: '0'
+    corr7: '0'
+    corr8: '0'
+    corr9: '0'
+    freq0: 1575.42e6
+    freq1: 100e6
+    freq10: 100e6
+    freq11: 100e6
+    freq12: 100e6
+    freq13: 100e6
+    freq14: 100e6
+    freq15: 100e6
+    freq16: 100e6
+    freq17: 100e6
+    freq18: 100e6
+    freq19: 100e6
+    freq2: 100e6
+    freq20: 100e6
+    freq21: 100e6
+    freq22: 100e6
+    freq23: 100e6
+    freq24: 100e6
+    freq25: 100e6
+    freq26: 100e6
+    freq27: 100e6
+    freq28: 100e6
+    freq29: 100e6
+    freq3: 100e6
+    freq30: 100e6
+    freq31: 100e6
+    freq4: 100e6
+    freq5: 100e6
+    freq6: 100e6
+    freq7: 100e6
+    freq8: 100e6
+    freq9: 100e6
+    gain0: '0'
+    gain1: '10'
+    gain10: '10'
+    gain11: '10'
+    gain12: '10'
+    gain13: '10'
+    gain14: '10'
+    gain15: '10'
+    gain16: '10'
+    gain17: '10'
+    gain18: '10'
+    gain19: '10'
+    gain2: '10'
+    gain20: '10'
+    gain21: '10'
+    gain22: '10'
+    gain23: '10'
+    gain24: '10'
+    gain25: '10'
+    gain26: '10'
+    gain27: '10'
+    gain28: '10'
+    gain29: '10'
+    gain3: '10'
+    gain30: '10'
+    gain31: '10'
+    gain4: '10'
+    gain5: '10'
+    gain6: '10'
+    gain7: '10'
+    gain8: '10'
+    gain9: '10'
+    if_gain0: tx_gain
+    if_gain1: '20'
+    if_gain10: '20'
+    if_gain11: '20'
+    if_gain12: '20'
+    if_gain13: '20'
+    if_gain14: '20'
+    if_gain15: '20'
+    if_gain16: '20'
+    if_gain17: '20'
+    if_gain18: '20'
+    if_gain19: '20'
+    if_gain2: '20'
+    if_gain20: '20'
+    if_gain21: '20'
+    if_gain22: '20'
+    if_gain23: '20'
+    if_gain24: '20'
+    if_gain25: '20'
+    if_gain26: '20'
+    if_gain27: '20'
+    if_gain28: '20'
+    if_gain29: '20'
+    if_gain3: '20'
+    if_gain30: '20'
+    if_gain31: '20'
+    if_gain4: '20'
+    if_gain5: '20'
+    if_gain6: '20'
+    if_gain7: '20'
+    if_gain8: '20'
+    if_gain9: '20'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    nchan: '1'
+    num_mboards: '1'
+    sample_rate: samp_rate
+    sync: none
+    time_source0: ''
+    time_source1: ''
+    time_source2: ''
+    time_source3: ''
+    time_source4: ''
+    time_source5: ''
+    time_source6: ''
+    time_source7: ''
+    type: fc32
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1368, 240.0]
+    rotation: 0
+    state: enabled
+- name: qtgui_const_sink_x_0
+  id: qtgui_const_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '0.4'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'True'
+    axislabels: 'True'
+    color1: '"blue"'
+    color10: '"dark blue"'
+    color2: '"red"'
+    color3: '"green"'
+    color4: '"black"'
+    color5: '"cyan"'
+    color6: '"magenta"'
+    color7: '"yellow"'
+    color8: '"dark red"'
+    color9: '"dark green"'
+    comment: I vs Q scatter. GPS C/A is noise-like without a correlator.
+    grid: 'True'
+    gui_hint: tabs@3
+    label1: GPS L1
+    label10: ''
+    label2: ''
+    label3: ''
+    label4: ''
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    legend: 'True'
+    marker1: '0'
+    marker10: '0'
+    marker2: '0'
+    marker3: '0'
+    marker4: '0'
+    marker5: '0'
+    marker6: '0'
+    marker7: '0'
+    marker8: '0'
+    marker9: '0'
+    name: '"GPS L1 C/A \u2014 Constellation"'
+    nconnections: '1'
+    size: '8192'
+    style1: '0'
+    style10: '0'
+    style2: '0'
+    style3: '0'
+    style4: '0'
+    style5: '0'
+    style6: '0'
+    style7: '0'
+    style8: '0'
+    style9: '0'
+    tr_chan: '0'
+    tr_level: '0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.1'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    xmax: '1.5'
+    xmin: '-1.5'
+    ymax: '1.5'
+    ymin: '-1.5'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [456, 832.0]
+    rotation: 0
+    state: enabled
+- name: qtgui_freq_sink_x_0
+  id: qtgui_freq_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'True'
+    average: '1.0'
+    axislabels: 'True'
+    bw: samp_rate
+    color1: '"cyan"'
+    color10: '"dark blue"'
+    color2: '"red"'
+    color3: '"green"'
+    color4: '"black"'
+    color5: '"cyan"'
+    color6: '"magenta"'
+    color7: '"yellow"'
+    color8: '"dark red"'
+    color9: '"dark green"'
+    comment: GPS L1 C/A appears as a 2 MHz wide noise hump at 1575.42 MHz
+    ctrlpanel: 'False'
+    fc: center_freq
+    fftsize: '4096'
+    freqhalf: 'True'
+    grid: 'True'
+    gui_hint: tabs@0
+    label: GPS L1 C/A Spectrum
+    label1: IQ stream
+    label10: ''''''
+    label2: ''''''
+    label3: ''''''
+    label4: ''''''
+    label5: ''''''
+    label6: ''''''
+    label7: ''''''
+    label8: ''''''
+    label9: ''''''
+    legend: 'True'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: '"GPS L1 C/A \u2014 FFT Spectrum"'
+    nconnections: '1'
+    norm_window: 'True'
+    showports: 'False'
+    tr_chan: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_tag: '""'
+    type: complex
+    units: dB
+    update_time: '0.05'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    wintype: window.WIN_BLACKMAN_hARRIS
+    ymax: '-40'
+    ymin: '-120'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [620, 140]
+    rotation: 0
+    state: enabled
 - name: qtgui_time_sink_x_0
   id: qtgui_time_sink_x
   parameters:
     affinity: ''
     alias: ''
     alpha1: '1.0'
+    alpha10: '1.0'
     alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
     autoscale: 'True'
     axislabels: 'True'
     color1: cyan
+    color10: dark blue
     color2: red
+    color3: green
+    color4: black
+    color5: cyan
+    color6: magenta
+    color7: yellow
+    color8: dark red
+    color9: dark green
     comment: I (cyan) and Q (red) after 100x decimation
     ctrlpanel: 'False'
     entags: 'True'
     grid: 'True'
     gui_hint: tabs@2
     label1: I
+    label10: Signal 10
     label2: Q
+    label3: Signal 3
+    label4: Signal 4
+    label5: Signal 5
+    label6: Signal 6
+    label7: Signal 7
+    label8: Signal 8
+    label9: Signal 9
     legend: 'True'
     marker1: '-1'
+    marker10: '-1'
     marker2: '-1'
-    maxoutbuf: '0'
-    minoutbuf: '0'
+    marker3: '-1'
+    marker4: '-1'
+    marker5: '-1'
+    marker6: '-1'
+    marker7: '-1'
+    marker8: '-1'
+    marker9: '-1'
     name: '"GPS L1 C/A \u2014 Time Domain (dec x100)"'
     nconnections: '1'
     size: '1024'
     srate: samp_rate/100
     stemplot: 'False'
     style1: '1'
+    style10: '1'
     style2: '1'
+    style3: '1'
+    style4: '1'
+    style5: '1'
+    style6: '1'
+    style7: '1'
+    style8: '1'
+    style9: '1'
     tr_chan: '0'
     tr_delay: '0'
     tr_level: '0'
@@ -376,7 +731,15 @@ blocks:
     type: complex
     update_time: '0.1'
     width1: '1'
+    width10: '1'
     width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
     ylabel: Amplitude
     ymax: '1.5'
     ymin: '-1.5'
@@ -385,88 +748,70 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [640, 380]
+    coordinate: [784, 660.0]
     rotation: 0
     state: enabled
-
-# ── Constellation sink ─────────────────────────────────────────────────────────
-
-- name: qtgui_const_sink_x_0
-  id: qtgui_const_sink_x
+- name: qtgui_waterfall_sink_x_0
+  id: qtgui_waterfall_sink_x
   parameters:
     affinity: ''
     alias: ''
-    alpha1: '0.4'
-    autoscale: 'False'
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
     axislabels: 'True'
-    comment: I vs Q scatter. GPS C/A is noise-like without a correlator.
+    bw: samp_rate
+    color1: '0'
+    color10: '0'
+    color2: '0'
+    color3: '0'
+    color4: '0'
+    color5: '0'
+    color6: '0'
+    color7: '0'
+    color8: '0'
+    color9: '0'
+    comment: Time vs frequency heatmap
+    fc: center_freq
+    fftsize: '4096'
+    freqhalf: 'True'
     grid: 'True'
-    gui_hint: tabs@3
-    label1: GPS L1
+    gui_hint: tabs@1
+    int_max: '40'
+    int_min: '-40'
+    label1: ''
+    label10: ''
+    label2: ''
+    label3: ''
+    label4: ''
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
     legend: 'True'
-    marker1: '0'
     maxoutbuf: '0'
     minoutbuf: '0'
-    name: '"GPS L1 C/A \u2014 Constellation"'
+    name: '"GPS L1 C/A \u2014 Waterfall"'
     nconnections: '1'
     showports: 'False'
-    size: '8192'
-    style1: '0'
-    tr_chan: '0'
-    tr_level: '0'
-    tr_mode: qtgui.TRIG_MODE_FREE
-    tr_slope: qtgui.TRIG_SLOPE_POS
-    tr_tag: '""'
     type: complex
-    update_time: '0.1'
-    xmax: '1.5'
-    xmin: '-1.5'
-    ymax: '1.5'
-    ymin: '-1.5'
+    update_time: '0.05'
+    wintype: window.WIN_BLACKMAN_hARRIS
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [620, 500]
+    coordinate: [1424, 660.0]
     rotation: 0
     state: enabled
-
-# ── HackRF TX via osmosdr ──────────────────────────────────────────────────────
-
-- name: osmosdr_sink_0
-  id: osmosdr_sink
-  parameters:
-    affinity: ''
-    alias: ''
-    ant0: ''
-    args: hackrf=0
-    bandwidth0: samp_rate
-    bb_gain0: '0'
-    center_freq0: center_freq
-    comment: "HackRF One TX @ GPS L1 1575.42 MHz.\nif_gain0 = tx_gain slider (TX\
-      \ VGA, 0\u201347 dB).\ngain0 = 0 (amp off) or 14 (amp on).\nNOTE: GRC osmosdr\
-      \ template may hardcode 100 MHz \u2014 the generated .py fixes this to center_freq."
-    corr0: '0'
-    freq_corr0: '0'
-    gain0: '0'
-    if_gain0: tx_gain
-    maxoutbuf: '0'
-    minoutbuf: '0'
-    norm_gain0: 'False'
-    num_chans: '1'
-    sample_rate: samp_rate
-    sync: none
-    type: fc32
-  states:
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [900, 220]
-    rotation: 0
-    state: enabled
-
-# ── Tab widget ─────────────────────────────────────────────────────────────────
-
 - name: tabs
   id: qtgui_tab_widget
   parameters:
@@ -475,30 +820,43 @@ blocks:
     gui_hint: 1,0,1,1
     label0: FFT Spectrum
     label1: Waterfall
+    label10: Tab 10
+    label11: Tab 11
+    label12: Tab 12
+    label13: Tab 13
+    label14: Tab 14
+    label15: Tab 15
+    label16: Tab 16
+    label17: Tab 17
+    label18: Tab 18
+    label19: Tab 19
     label2: Time Domain
     label3: Constellation
     label4: Tab 4
-    maxoutbuf: '0'
-    minoutbuf: '0'
+    label5: Tab 5
+    label6: Tab 6
+    label7: Tab 7
+    label8: Tab 8
+    label9: Tab 9
     num_tabs: '4'
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [620, 60]
+    coordinate: [1440, 24.0]
     rotation: 0
     state: enabled
 
 connections:
-# UDP source -> converter (default — GR listens on udp_port, app sends here)
-- [network_udp_source_0, '0', blocks_interleaved_char_to_complex_0, '0']
-
-# i8 bytes -> complex float -> displays
+- [blocks_interleaved_char_to_complex_0, '0', blocks_keep_one_in_n_0, '0']
+- [blocks_interleaved_char_to_complex_0, '0', osmosdr_sink_0, '0']
+- [blocks_interleaved_char_to_complex_0, '0', qtgui_const_sink_x_0, '0']
 - [blocks_interleaved_char_to_complex_0, '0', qtgui_freq_sink_x_0, '0']
 - [blocks_interleaved_char_to_complex_0, '0', qtgui_waterfall_sink_x_0, '0']
-- [blocks_interleaved_char_to_complex_0, '0', blocks_keep_one_in_n_0, '0']
 - [blocks_keep_one_in_n_0, '0', qtgui_time_sink_x_0, '0']
-- [blocks_interleaved_char_to_complex_0, '0', qtgui_const_sink_x_0, '0']
+- [network_tcp_source_0, '0', blocks_interleaved_char_to_complex_0, '0']
+- [network_udp_source_0, '0', blocks_interleaved_char_to_complex_0, '0']
 
-# complex float -> HackRF TX
-- [blocks_interleaved_char_to_complex_0, '0', osmosdr_sink_0, '0']
+metadata:
+  file_format: 1
+  grc_version: 3.10.12.0
