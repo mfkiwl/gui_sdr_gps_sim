@@ -4,7 +4,7 @@ This project is a **work in progress**. It has not been thoroughly tested across
 
 # GUI SDR GPS Simulator
 
-A cross-platform desktop application for **generating and transmitting realistic GPS L1 C/A signals** via a HackRF One software-defined radio. It includes a full route creation toolset so you can simulate a GPS receiver moving along any path in the world — a city walk, a car journey, a flight — and feed that signal to real GPS hardware.
+A cross-platform desktop application for **generating and transmitting realistic GNSS signals** via a HackRF One software-defined radio. It supports **GPS L1 C/A**, **BeiDou B1C**, and **Galileo E1** — all three share the 1575.42 MHz carrier and are combined into a single IQ stream. It includes a full route creation toolset so you can simulate a receiver moving along any path in the world — a city walk, a car journey, a flight — and feed that signal to real GNSS hardware.
 
 Built in Rust using [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui). Runs natively on **Windows, Linux, and macOS**.
 
@@ -32,6 +32,7 @@ The goal is a polished, easy-to-use desktop application — not just a command-l
    - [Static mode](#static-mode)
    - [Interactive mode](#interactive-mode)
    - [Simulator settings](#simulator-settings)
+   - [Constellations](#constellations)
    - [SDR output options](#sdr-output-options)
 7. [Create UMF Route](#create-umf-route)
    - [OpenRouteService API](#openrouteservice-api)
@@ -52,6 +53,7 @@ The goal is a polished, easy-to-use desktop application — not just a command-l
 
 | Feature | Description |
 |---|---|
+| **Multi-constellation** | Simultaneous GPS L1 C/A, BeiDou B1C, and Galileo E1-B signals — all at 1575.42 MHz, combined in one IQ stream |
 | **Dynamic simulation** | Simulate a moving receiver following a pre-recorded route at a configurable speed |
 | **Static simulation** | Hold a fixed geographic position; loop indefinitely for continuous testing |
 | **Interactive simulation** | Steer the receiver position in real time using keyboard controls |
@@ -67,7 +69,7 @@ The goal is a polished, easy-to-use desktop application — not just a command-l
 | **IQ file output** | Save raw 8-bit IQ samples to a binary file for offline use |
 | **UDP / TCP streaming** | Stream IQ samples over the network for GNU Radio or other tools |
 | **RINEX download** | Download today's broadcast ephemeris automatically from NASA CDDIS |
-| **Advanced signal control** | Ionospheric model, elevation mask, PRN blocking, oscillator offset, leap seconds, fixed gain |
+| **Advanced signal control** | Constellation selection, ionospheric model, elevation mask, PRN blocking, oscillator offset, leap seconds, fixed gain |
 
 ---
 
@@ -134,11 +136,11 @@ Rust 1.88 is selected automatically from the `rust-toolchain` file.
 ## Quick start
 
 1. **Launch the app** and navigate to the **GPS Simulator** page using the left sidebar.
-2. **Download a RINEX file** — click *Download Today's RINEX* to fetch the current broadcast ephemeris from NASA. This tells the simulator where every GPS satellite is right now.
+2. **Download a RINEX file** — click *Download Today's RINEX* to fetch the current broadcast ephemeris from NASA. This RINEX 3 file contains satellite orbit data for GPS, BeiDou, and Galileo.
 3. **Create a route** (optional for static mode) — go to **Create UMF Route**, draw a path on the map or fetch one from the ORS API, set a speed, and click *Generate User Motion File*.
 4. **Select the route** — back on the GPS Simulator page, click the route in the Route Library table.
 5. **Click Start** — the simulation begins. Watch the position marker move along the route on the live map.
-6. **Check your GPS receiver** — it should start acquiring satellites and reporting a position within 30–60 seconds, depending on the device.
+6. **Check your GNSS receiver** — it should start acquiring satellites and reporting a position within 30–60 seconds, depending on the device. Multi-constellation receivers may acquire faster thanks to the additional BeiDou and Galileo signals.
 
 ---
 
@@ -223,6 +225,18 @@ The **Settings** tab applies to all three modes. Changes take effect the next ti
 | **Centre frequency (Hz)** | Carrier frequency transmitted by the HackRF. Default is GPS L1 C/A = 1 575 420 000 Hz. |
 | **Baseband filter (Hz)** | Override the automatic filter bandwidth selection. Leave blank for automatic. |
 
+#### Constellations
+
+| Setting | Description |
+|---|---|
+| **GPS L1 C/A** | Always enabled. 1023-chip Gold code at 1.023 Mcps, up to 32 satellites (PRN 1–32). |
+| **BeiDou B1C** | Optional. 10 230-chip Weil code at 10.23 Mcps, up to 63 satellites. Requires a RINEX 3 nav file with BeiDou (`C`) records. |
+| **Galileo E1-B** | Optional. 4092-chip LFSR code at 4.092 Mcps, up to 36 satellites. Requires a RINEX 3 nav file with Galileo (`E`) records. |
+
+All three signals share the 1575.42 MHz carrier and are summed into the same 8-bit IQ output buffer. The simulator tracks up to 24 channels in total across all enabled constellations. No changes to GNU Radio flow graphs or HackRF settings are required when enabling additional constellations.
+
+> **Note:** BeiDou and Galileo use a GPS LNAV-style navigation message as a simulation approximation. Navigation data accuracy is sufficient for most receiver spoofing and test scenarios, but not for precision navigation research.
+
 #### Signal modelling
 
 | Setting | Description |
@@ -230,7 +244,7 @@ The **Settings** tab applies to all three modes. Changes take effect the next ti
 | **Disable ionospheric model** | Skips the Klobuchar ionospheric delay model. Useful for spacecraft scenarios above the ionosphere. |
 | **Fixed gain** | Holds all satellite signals at a constant level instead of computing free-space path loss per satellite. |
 | **Elevation mask (°)** | Satellites below this elevation angle are excluded. 0 = no mask (all satellites used). |
-| **Block PRNs** | Comma-separated list of satellite PRN numbers (1–32) to exclude entirely. |
+| **Block PRNs** | Comma-separated list of PRN numbers to exclude (applies to all constellations). |
 | **Oscillator offset (ppb)** | Simulate a receiver clock frequency offset in parts-per-billion. |
 | **Leap seconds** | Manual override for leap second correction: GPS week, day of week (1–7), delta leap seconds. |
 
@@ -428,7 +442,7 @@ python gnuradio/gps_l1_analyzer.py
 |---|---|
 | Encoding | Signed 8-bit integers (`i8`), interleaved `[I0, Q0, I1, Q1, …]` |
 | Sample rate | 3 000 000 sps |
-| Centre frequency | 1 575 420 000 Hz (GPS L1 C/A) |
+| Centre frequency | 1 575 420 000 Hz — GPS L1 C/A, BeiDou B1C, and Galileo E1 share this carrier |
 | UDP packet size | 32 768 bytes = 16 384 complex samples |
 | TCP | Continuous byte stream, no framing |
 | GNU Radio block | `interleaved_char_to_complex(scale=1/128)` → complex float ±1.0 |
@@ -462,13 +476,15 @@ gui_sdr_gps_sim/
 │   │   ├── mod.rs           Public simulator API
 │   │   ├── state.rs         SimSettings, SimState, SimStatus, SimOutputType
 │   │   └── worker.rs        Background simulation thread entry-points
-│   ├── gps_sim/             GPS L1 C/A baseband signal engine
-│   │   ├── orbit            Satellite orbit propagation
+│   ├── gps_sim/             GNSS baseband signal engine (GPS / BeiDou / Galileo)
+│   │   ├── orbit            Satellite orbit propagation (Kepler + perturbations)
 │   │   ├── ionosphere       Klobuchar ionospheric delay model
 │   │   ├── troposphere      Hopfield tropospheric delay model
-│   │   ├── codegen          C/A Gold code generation (PRN 1–37)
+│   │   ├── codegen          GPS C/A Gold code generation (PRN 1–32)
+│   │   ├── beidou           BeiDou B1C Weil code generation (PRN 1–63)
+│   │   ├── galileo          Galileo E1-B/C LFSR code generation (PRN 1–36)
 │   │   ├── navmsg           GPS navigation message generation
-│   │   ├── rinex            RINEX 2/3 broadcast ephemeris parser
+│   │   ├── rinex            RINEX 2/3 multi-constellation ephemeris parser
 │   │   ├── signal           IQ sample accumulation (100 ms blocks)
 │   │   ├── fifo             8 × 262 KB lock-free FIFO
 │   │   ├── hackrf           HackRF USB TX thread
