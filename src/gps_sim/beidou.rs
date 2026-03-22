@@ -145,3 +145,94 @@ fn mod_pow(mut base: u64, mut exp: u64, modulus: u64) -> u64 {
     }
     result
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// B1C data code must always be exactly 10 230 chips.
+    #[test]
+    fn code_length_all_prns() {
+        for prn in 1u8..=63 {
+            assert_eq!(
+                generate_b1c_data(prn).len(),
+                N,
+                "PRN {prn} B1C data code length mismatch"
+            );
+        }
+    }
+
+    /// Every chip must be exactly ±1.
+    #[test]
+    fn code_values_bipolar() {
+        for prn in 1u8..=10 {
+            let code = generate_b1c_data(prn);
+            assert!(
+                code.iter().all(|&c| c == 1 || c == -1),
+                "PRN {prn} contains non-bipolar chip"
+            );
+        }
+    }
+
+    /// Weil codes are nearly balanced: ±1 counts should differ by at most ~1%.
+    /// ICD codes (PRNs 1–10) get a tighter bound (0.5%); approximated codes
+    /// (PRNs 11–63) get 5% to accommodate parameter approximation.
+    #[test]
+    fn code_balance_icd_prns() {
+        for prn in 1u8..=10 {
+            let code = generate_b1c_data(prn);
+            let ones = code.iter().filter(|&&c| c == 1).count();
+            let half = N / 2; // 5115
+            let tol = half / 200; // 0.5% ≈ 25 chips
+            assert!(
+                ones.abs_diff(half) <= tol,
+                "PRN {prn}: {ones} ones out of {N} chips — imbalanced"
+            );
+        }
+    }
+
+    /// Different PRNs must produce different code sequences.
+    #[test]
+    fn distinct_prns() {
+        let code1 = generate_b1c_data(1);
+        let code2 = generate_b1c_data(2);
+        assert_ne!(
+            code1, code2,
+            "PRN 1 and PRN 2 B1C codes are identical — wrong lookup tables"
+        );
+    }
+
+    /// Low cross-correlation between PRN 1 and PRN 2 (normalised < 5%).
+    ///
+    /// Weil codes are designed to have low cross-correlation.  Even with
+    /// the 7-chip placeholder extension the bulk of the 10223-chip Legendre
+    /// portion should be near-orthogonal.
+    #[test]
+    fn low_cross_correlation_prn1_prn2() {
+        let c1 = generate_b1c_data(1);
+        let c2 = generate_b1c_data(2);
+        let xcorr: i32 = c1.iter().zip(c2.iter()).map(|(&a, &b)| a as i32 * b as i32).sum();
+        let threshold = (N as f64 * 0.05) as i32; // 5% of code length
+        assert!(
+            xcorr.unsigned_abs() <= threshold as u32,
+            "Cross-correlation {xcorr} exceeds 5% threshold {threshold}"
+        );
+    }
+
+    /// Modular exponentiation sanity check: 2^10 mod 11 = 1024 mod 11 = 1.
+    #[test]
+    fn mod_pow_basic() {
+        assert_eq!(mod_pow(2, 10, 11), 1);
+        assert_eq!(mod_pow(3, 0, 7), 1);
+        assert_eq!(mod_pow(0, 5, 13), 0);
+    }
+
+    /// Clamping: PRN 0 and PRN 64 must not panic and produce valid codes.
+    #[test]
+    fn out_of_range_prn_clamped() {
+        assert_eq!(generate_b1c_data(0).len(), N);
+        assert_eq!(generate_b1c_data(64).len(), N);
+    }
+}

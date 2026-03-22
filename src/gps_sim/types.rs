@@ -396,3 +396,118 @@ pub struct IonoUtc {
     /// UTC reference week number.
     pub wnt: i32,
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Constellation constants ───────────────────────────────────────────────
+
+    /// GPS uses the WGS-84 gravitational constant.
+    #[test]
+    fn gps_gm() {
+        assert_eq!(Constellation::Gps.gm(), 3.986_005e14);
+    }
+
+    /// `BeiDou` and Galileo use CGCS2000 / GTRF which differs from WGS-84.
+    #[test]
+    fn beidou_galileo_gm_differ_from_gps() {
+        let gps_gm = Constellation::Gps.gm();
+        assert_ne!(Constellation::BeiDou.gm(), gps_gm);
+        assert_eq!(Constellation::BeiDou.gm(), Constellation::Galileo.gm());
+    }
+
+    /// `BeiDou` Earth rotation rate (CGCS2000) differs slightly from WGS-84.
+    #[test]
+    fn omega_e_differs_by_constellation() {
+        let gps_oe = Constellation::Gps.omega_e();
+        let bds_oe = Constellation::BeiDou.omega_e();
+        let gal_oe = Constellation::Galileo.omega_e();
+        assert_ne!(bds_oe, gps_oe, "BeiDou omega_e should differ from GPS");
+        assert_eq!(gal_oe, gps_oe, "Galileo omega_e should match GPS (WGS-84/GTRF)");
+    }
+
+    /// All three constellations share the 1575.42 MHz carrier.
+    #[test]
+    fn shared_carrier_frequency() {
+        assert_eq!(Constellation::Gps.carrier_freq(), 1_575_420_000.0);
+        assert_eq!(Constellation::BeiDou.carrier_freq(), 1_575_420_000.0);
+        assert_eq!(Constellation::Galileo.carrier_freq(), 1_575_420_000.0);
+    }
+
+    /// `max_svs` returns ICD-correct constellation sizes.
+    #[test]
+    fn max_svs() {
+        assert_eq!(Constellation::Gps.max_svs(), 32);
+        assert_eq!(Constellation::BeiDou.max_svs(), 63);
+        assert_eq!(Constellation::Galileo.max_svs(), 36);
+    }
+
+    // ── GpsTime arithmetic ────────────────────────────────────────────────────
+
+    /// `add_secs` rolls the week counter forward at week boundary.
+    #[test]
+    fn add_secs_rolls_week_forward() {
+        let t = GpsTime { week: 100, sec: 604_799.9 };
+        let t2 = t.add_secs(0.2);
+        assert_eq!(t2.week, 101);
+        assert!((t2.sec - 0.1).abs() < 1e-9, "sec after rollover: {}", t2.sec);
+    }
+
+    /// `add_secs` rolls the week counter backward.
+    #[test]
+    fn add_secs_rolls_week_backward() {
+        let t = GpsTime { week: 5, sec: 0.0 };
+        let t2 = t.add_secs(-1.0);
+        assert_eq!(t2.week, 4);
+        assert!((t2.sec - (GpsTime::SECS_PER_WEEK - 1.0)).abs() < 1e-9);
+    }
+
+    /// sub returns signed difference in seconds across week boundary.
+    #[test]
+    fn sub_across_week() {
+        let a = GpsTime { week: 2, sec: 0.0 };
+        let b = GpsTime { week: 1, sec: 604_799.0 };
+        let diff = a.sub(b);
+        assert!((diff - 1.0).abs() < 1e-9, "diff = {diff}");
+    }
+
+    // ── UtcDate → GPS time conversion ─────────────────────────────────────────
+
+    /// GPS epoch (6 Jan 1980 00:00:00 UTC) must convert to week=0, sec=0.
+    #[test]
+    fn gps_epoch_converts_to_zero() {
+        let utc = UtcDate { year: 1980, month: 1, day: 6, hour: 0, min: 0, sec: 0.0 };
+        let gps = utc.to_gps();
+        assert_eq!(gps.week, 0, "GPS epoch should be week 0");
+        assert!(gps.sec.abs() < 1e-9, "GPS epoch should be sec 0");
+    }
+
+    /// `BeiDou` time epoch (1 Jan 2006 00:00:00 UTC) falls in GPS week 1356.
+    ///
+    /// `UtcDate::to_gps()` is a pure calendar conversion with no leap-second
+    /// correction.  The 14-second BDT→GPS offset (`BDT_GPS_LEAP_SECS`) is added
+    /// separately in the RINEX parser, not here.
+    #[test]
+    fn bdt_epoch_calendar_is_gps_week_1356() {
+        let utc = UtcDate { year: 2006, month: 1, day: 1, hour: 0, min: 0, sec: 0.0 };
+        let gps = utc.to_gps();
+        assert_eq!(gps.week, 1356, "BDT epoch calendar date should map to GPS week 1356");
+        // sec = 0 because UtcDate::to_gps does not apply leap seconds;
+        // the +14 s GPST–BDT offset is applied in rinex.rs.
+        assert!(gps.sec.abs() < 1e-9, "raw calendar sec should be 0");
+    }
+
+    /// Two-digit year interpretation: ≥80 → 19xx, <80 → 20xx (RINEX 2 rule).
+    #[test]
+    fn two_digit_year_rinex2() {
+        let y80 = UtcDate { year: 80, month: 1, day: 6, hour: 0, min: 0, sec: 0.0 };
+        let y00 = UtcDate { year: 0, month: 1, day: 6, hour: 0, min: 0, sec: 0.0 };
+        // year 80 → 1980, day 6 of Jan = GPS epoch → week 0
+        assert_eq!(y80.to_gps().week, 0);
+        // year 0 → 2000; 2000-01-06 is 20 years after GPS epoch ≈ week 1042
+        assert!(y00.to_gps().week > 1000, "year 2000 Jan 6 should be well past week 1000");
+    }
+}

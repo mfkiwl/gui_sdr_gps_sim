@@ -111,3 +111,106 @@ fn generate_lfsr_code(g1_init: u16, g2_init: u16) -> [i8; GALILEO_E1_CODE_LEN] {
     }
     code
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// E1-B and E1-C codes must each be exactly 4092 chips.
+    #[test]
+    fn code_length_all_prns() {
+        for prn in 1u8..=36 {
+            assert_eq!(
+                generate_e1b(prn).len(),
+                GALILEO_E1_CODE_LEN,
+                "E1-B PRN {prn} length mismatch"
+            );
+            assert_eq!(
+                generate_e1c(prn).len(),
+                GALILEO_E1_CODE_LEN,
+                "E1-C PRN {prn} length mismatch"
+            );
+        }
+    }
+
+    /// Every chip must be exactly ±1.
+    #[test]
+    fn code_values_bipolar() {
+        for prn in 1u8..=36 {
+            let b = generate_e1b(prn);
+            assert!(
+                b.iter().all(|&c| c == 1 || c == -1),
+                "E1-B PRN {prn} contains non-bipolar chip"
+            );
+            let c = generate_e1c(prn);
+            assert!(
+                c.iter().all(|&c| c == 1 || c == -1),
+                "E1-C PRN {prn} contains non-bipolar chip"
+            );
+        }
+    }
+
+    /// E1-B and E1-C codes for the same PRN must differ (different G2 init states).
+    #[test]
+    fn e1b_differs_from_e1c() {
+        for prn in 1u8..=36 {
+            let b = generate_e1b(prn);
+            let c = generate_e1c(prn);
+            assert_ne!(b, c, "E1-B and E1-C are identical for PRN {prn}");
+        }
+    }
+
+    /// Different PRNs must produce different E1-B codes.
+    #[test]
+    fn distinct_prns_e1b() {
+        let c1 = generate_e1b(1);
+        let c2 = generate_e1b(2);
+        assert_ne!(c1, c2, "E1-B PRN 1 and PRN 2 are identical");
+    }
+
+    /// Galileo E1-B codes must be roughly balanced (±5% of half the code length).
+    ///
+    /// The 4092-chip LFSR runs a non-maximal sequence; individual PRNs can show
+    /// up to ~2% imbalance depending on the G2 initial state.  5% is a safe upper
+    /// bound — anything beyond that indicates a wrong `G2_INIT_E1B` entry.
+    #[test]
+    fn code_balance() {
+        let tol = GALILEO_E1_CODE_LEN / 20; // 5% ≈ 204 chips
+        for prn in 1u8..=36 {
+            let b = generate_e1b(prn);
+            let ones = b.iter().filter(|&&c| c == 1).count();
+            let half = GALILEO_E1_CODE_LEN / 2;
+            assert!(
+                ones.abs_diff(half) <= tol,
+                "E1-B PRN {prn}: {ones} ones — imbalanced beyond 5%"
+            );
+        }
+    }
+
+    /// PRN 1 E1-B first chip: with G1=0x3FFF and G2=0x2523,
+    /// both MSBs (bit 13) are 1 → XOR = 0 → bipolar −1.
+    #[test]
+    fn prn1_e1b_first_chip() {
+        let code = generate_e1b(1);
+        // G1=0x3FFF (bit13=1), G2=0x2523 (0x2523 >> 13 = 1) → XOR=0 → -1
+        assert_eq!(code[0], -1, "E1-B PRN 1 first chip should be -1");
+    }
+
+    /// `G2_INIT_E1B` and `G2_INIT_E1C` have correct lengths (one entry per SV 1–36).
+    #[test]
+    fn init_table_lengths() {
+        assert_eq!(G2_INIT_E1B.len(), 36);
+        assert_eq!(G2_INIT_E1C.len(), 36);
+    }
+
+    /// Out-of-range PRNs are clamped and must not panic.
+    #[test]
+    fn out_of_range_prn_clamped() {
+        assert_eq!(generate_e1b(0).len(), GALILEO_E1_CODE_LEN);
+        assert_eq!(generate_e1b(37).len(), GALILEO_E1_CODE_LEN);
+        assert_eq!(generate_e1c(0).len(), GALILEO_E1_CODE_LEN);
+        assert_eq!(generate_e1c(37).len(), GALILEO_E1_CODE_LEN);
+    }
+}
