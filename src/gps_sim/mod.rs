@@ -31,10 +31,12 @@
 //! # Feature flags
 //! *(none yet — all features are compiled unconditionally)*
 
+pub mod beidou;
 pub mod codegen;
 pub mod coords;
 pub mod error;
 pub mod fifo;
+pub mod galileo;
 pub mod hackrf;
 pub mod ionosphere;
 pub mod navmsg;
@@ -55,7 +57,7 @@ pub use rinex::NavData;
 pub use sim::{
     InteractiveState, SatInfo, SimEvent, SimProgress, Simulator, SimulatorBuilder, SimulatorHandle,
 };
-pub use types::{GpsTime, Location, StartTime, UtcDate};
+pub use types::{Constellation, GpsTime, Location, StartTime, UtcDate};
 
 /// Selects where the simulator sends its IQ samples.
 #[derive(Debug, Clone)]

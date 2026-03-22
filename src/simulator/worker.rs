@@ -128,7 +128,9 @@ fn run_interactive_native(
         .fixed_gain(settings.fixed_gain)
         .leap_override(settings.leap)
         .hackrf_sample_rate(settings.frequency as f64)
-        .hackrf_center_freq(settings.center_frequency);
+        .hackrf_center_freq(settings.center_frequency)
+        .use_beidou(settings.use_beidou)
+        .use_galileo(settings.use_galileo);
 
     if let Some(bw) = settings.baseband_filter {
         builder = builder.hackrf_baseband_filter(bw);
@@ -199,7 +201,9 @@ fn run_static_loop_native(
             .fixed_gain(settings.fixed_gain)
             .leap_override(settings.leap)
             .hackrf_sample_rate(settings.frequency as f64)
-            .hackrf_center_freq(settings.center_frequency);
+            .hackrf_center_freq(settings.center_frequency)
+            .use_beidou(settings.use_beidou)
+            .use_galileo(settings.use_galileo);
         let builder = if let Some(bw) = settings.baseband_filter {
             builder.hackrf_baseband_filter(bw)
         } else {
@@ -271,7 +275,9 @@ fn run_native(
         .fixed_gain(settings.fixed_gain)
         .leap_override(settings.leap)
         .hackrf_sample_rate(settings.frequency as f64)
-        .hackrf_center_freq(settings.center_frequency);
+        .hackrf_center_freq(settings.center_frequency)
+        .use_beidou(settings.use_beidou)
+        .use_galileo(settings.use_galileo);
     let builder = if let Some(bw) = settings.baseband_filter {
         builder.hackrf_baseband_filter(bw)
     } else {

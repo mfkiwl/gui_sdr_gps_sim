@@ -406,6 +406,16 @@ pub struct MyApp {
     #[serde(skip)]
     pub sim_tcp_port: u16,
 
+    /// Whether to include `BeiDou` B1C signals in the simulation (not persisted).
+    /// GPS L1 C/A is always included.
+    #[serde(skip)]
+    pub sim_use_beidou: bool,
+
+    /// Whether to include Galileo E1-B signals in the simulation (not persisted).
+    /// GPS L1 C/A is always included.
+    #[serde(skip)]
+    pub sim_use_galileo: bool,
+
     // ── Static tab waypoint picker ─────────────────────────────────────────────
     /// Index of the currently selected waypoint row on the static-tab picker (not persisted).
     #[serde(skip)]
@@ -617,6 +627,8 @@ impl Default for MyApp {
             sim_iq_file_path: "output.iq".to_owned(),
             sim_udp_addr: "127.0.0.1:4567".to_owned(),
             sim_tcp_port: 4567,
+            sim_use_beidou: false,
+            sim_use_galileo: false,
             sim_static_wp_selected_row: None,
             sim_static_map_tiles: None,
             sim_static_map_memory: walkers::MapMemory::default(),
@@ -1105,6 +1117,8 @@ impl MyApp {
             iq_file_path: self.sim_iq_file_path.clone(),
             udp_addr: self.sim_udp_addr.clone(),
             tcp_port: self.sim_tcp_port,
+            use_beidou: self.sim_use_beidou,
+            use_galileo: self.sim_use_galileo,
         };
 
         let state = std::sync::Arc::clone(&self.sim_static_state);
@@ -1191,6 +1205,8 @@ impl MyApp {
             iq_file_path: self.sim_iq_file_path.clone(),
             udp_addr: self.sim_udp_addr.clone(),
             tcp_port: self.sim_tcp_port,
+            use_beidou: self.sim_use_beidou,
+            use_galileo: self.sim_use_galileo,
         };
 
         let state = std::sync::Arc::clone(&self.sim_interactive_state);
@@ -1366,6 +1382,8 @@ impl MyApp {
             iq_file_path: self.sim_iq_file_path.clone(),
             udp_addr: self.sim_udp_addr.clone(),
             tcp_port: self.sim_tcp_port,
+            use_beidou: self.sim_use_beidou,
+            use_galileo: self.sim_use_galileo,
         };
         let state = std::sync::Arc::clone(&self.sim_state);
         let stop = std::sync::Arc::clone(&self.sim_stop_flag);

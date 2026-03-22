@@ -29,10 +29,9 @@ use super::navmsg::generate_nav_msg;
 use super::rinex::NavData;
 use super::signal::{COS_TABLE, SIN_TABLE, ant_pattern_linear};
 use super::types::{
-    GpsTime, Location, StartTime,
+    Constellation, GpsTime, Location, StartTime,
     consts::{
-        CARR_TO_CODE, CODE_FREQ_CA, DT, HACKRF_BUF_BYTES, LAMBDA_L1, MAX_CHANNELS,
-        SAMPLES_PER_STEP, STEP_SECS,
+        CARR_TO_CODE, DT, HACKRF_BUF_BYTES, LAMBDA_L1, MAX_CHANNELS, SAMPLES_PER_STEP, STEP_SECS,
     },
 };
 use super::{SdrOutput, SimError};
@@ -223,6 +222,10 @@ pub struct SimulatorBuilder {
     hackrf_center_freq: Option<u64>,
     hackrf_baseband_filter: Option<u32>,
     external_pause: Option<Arc<AtomicBool>>,
+    /// Enable `BeiDou` B1C signal simulation (adds SVs to the output buffer).
+    use_beidou: bool,
+    /// Enable Galileo E1-B signal simulation (adds SVs to the output buffer).
+    use_galileo: bool,
 }
 
 impl Default for SimulatorBuilder {
@@ -250,6 +253,8 @@ impl Default for SimulatorBuilder {
             hackrf_center_freq: None,
             hackrf_baseband_filter: None,
             external_pause: None,
+            use_beidou: false,
+            use_galileo: false,
         }
     }
 }
@@ -447,6 +452,26 @@ impl SimulatorBuilder {
         self
     }
 
+    /// Enable `BeiDou` B1C signal generation.
+    ///
+    /// When `true`, visible `BeiDou` SVs from the loaded RINEX file are added to
+    /// the IQ output alongside GPS L1 C/A.  `BeiDou` B1C shares the 1575.42 MHz
+    /// carrier so both signals appear in the same output buffer.
+    pub fn use_beidou(mut self, yes: bool) -> Self {
+        self.use_beidou = yes;
+        self
+    }
+
+    /// Enable Galileo E1-B signal generation.
+    ///
+    /// When `true`, visible Galileo SVs from the loaded RINEX file are added to
+    /// the IQ output alongside GPS L1 C/A.  Galileo E1 shares the 1575.42 MHz
+    /// carrier so all signals appear in the same output buffer.
+    pub fn use_galileo(mut self, yes: bool) -> Self {
+        self.use_galileo = yes;
+        self
+    }
+
     /// Load the RINEX file and build the [`Simulator`].
     ///
     /// # Errors
@@ -502,13 +527,15 @@ impl SimulatorBuilder {
             hackrf_center_freq: self.hackrf_center_freq,
             hackrf_baseband_filter: self.hackrf_baseband_filter,
             pause: self.external_pause,
+            use_beidou: self.use_beidou,
+            use_galileo: self.use_galileo,
         })
     }
 }
 
 // ── Simulator ─────────────────────────────────────────────────────────────────
 
-/// Configured GPS L1 C/A signal simulator.
+/// Configured GNSS signal simulator (GPS L1 C/A + optional `BeiDou` B1C / Galileo E1).
 ///
 /// Obtain via [`Simulator::builder`] → [`SimulatorBuilder::build`].
 pub struct Simulator {
@@ -535,6 +562,10 @@ pub struct Simulator {
     hackrf_center_freq: Option<u64>,
     hackrf_baseband_filter: Option<u32>,
     pause: Option<Arc<AtomicBool>>,
+    /// Whether to include `BeiDou` B1C signals in the output.
+    use_beidou: bool,
+    /// Whether to include Galileo E1-B signals in the output.
+    use_galileo: bool,
 }
 
 impl Simulator {
@@ -663,7 +694,23 @@ impl Simulator {
         }
         // Apply time override: shift all ephemeris TOC/TOE to the start time.
         if self.time_override {
-            for eph_set in &mut self.nav.eph {
+            for eph_set in &mut self.nav.gps {
+                for eph in eph_set.iter_mut() {
+                    if eph.valid {
+                        eph.toc = g0;
+                        eph.toe = g0;
+                    }
+                }
+            }
+            for eph_set in &mut self.nav.beidou {
+                for eph in eph_set.iter_mut() {
+                    if eph.valid {
+                        eph.toc = g0;
+                        eph.toe = g0;
+                    }
+                }
+            }
+            for eph_set in &mut self.nav.galileo {
                 for eph in eph_set.iter_mut() {
                     if eph.valid {
                         eph.toc = g0;
@@ -764,6 +811,8 @@ impl Simulator {
         let waypoints = self.waypoints;
         let blocked_prns = self.blocked_prns;
         let fixed_gain = self.fixed_gain;
+        let use_beidou = self.use_beidou;
+        let use_galileo = self.use_galileo;
         let emit: Arc<dyn Fn(SimEvent) + Send + Sync> = if let Some(f) = self.on_event {
             Arc::new(f)
         } else {
@@ -791,6 +840,8 @@ impl Simulator {
                     &*emit,
                     log_file,
                     fixed_gain,
+                    use_beidou,
+                    use_galileo,
                 );
                 producer.shutdown();
             })
@@ -871,6 +922,8 @@ impl Simulator {
         let duration = self.duration;
         let elev_mask = self.elev_mask;
         let fixed_gain = self.fixed_gain;
+        let use_beidou = self.use_beidou;
+        let use_galileo = self.use_galileo;
         let gps_thread = std::thread::Builder::new()
             .name("gps-gen".into())
             .spawn(move || {
@@ -890,6 +943,8 @@ impl Simulator {
                     &*emit2,
                     log_file,
                     fixed_gain,
+                    use_beidou,
+                    use_galileo,
                 );
                 producer.shutdown();
             })
@@ -938,6 +993,8 @@ impl Simulator {
         let duration = self.duration;
         let elev_mask = self.elev_mask;
         let fixed_gain = self.fixed_gain;
+        let use_beidou = self.use_beidou;
+        let use_galileo = self.use_galileo;
         let gps_thread = std::thread::Builder::new()
             .name("gps-gen".into())
             .spawn(move || {
@@ -957,6 +1014,8 @@ impl Simulator {
                     &*emit2,
                     log_file,
                     fixed_gain,
+                    use_beidou,
+                    use_galileo,
                 );
                 producer.shutdown();
             })
@@ -1030,6 +1089,8 @@ impl Simulator {
         let duration = self.duration;
         let elev_mask = self.elev_mask;
         let fixed_gain = self.fixed_gain;
+        let use_beidou = self.use_beidou;
+        let use_galileo = self.use_galileo;
 
         let gps_thread = std::thread::Builder::new()
             .name("gps-gen".into())
@@ -1050,6 +1111,8 @@ impl Simulator {
                     &*emit2,
                     log_file,
                     fixed_gain,
+                    use_beidou,
+                    use_galileo,
                 );
                 producer.shutdown();
             })
@@ -1117,6 +1180,8 @@ impl Simulator {
         let duration = self.duration;
         let elev_mask = self.elev_mask;
         let fixed_gain = self.fixed_gain;
+        let use_beidou = self.use_beidou;
+        let use_galileo = self.use_galileo;
 
         let gps_thread = std::thread::Builder::new()
             .name("gps-gen".into())
@@ -1137,6 +1202,8 @@ impl Simulator {
                     &*emit2,
                     log_file,
                     fixed_gain,
+                    use_beidou,
+                    use_galileo,
                 );
                 producer.shutdown();
             })
@@ -1179,7 +1246,9 @@ impl Simulator {
 /// - `producer`:      FIFO producer endpoint.
 /// - `emit`:          Event callback.
 /// - `log_file`:      Optional CSV position log file.
-/// - `fixed_gain`:  When `Some(v)`, override per-satellite gain with constant `v` (disables antenna pattern / path loss).
+/// - `fixed_gain`:    When `Some(v)`, override per-satellite gain with constant `v` (disables antenna pattern / path loss).
+/// - `use_beidou`:    When `true`, include `BeiDou` B1C channels.
+/// - `use_galileo`:   When `true`, include Galileo E1-B channels.
 #[expect(
     clippy::too_many_arguments,
     reason = "core IQ generation loop; all parameters required"
@@ -1190,7 +1259,7 @@ impl Simulator {
 )]
 #[expect(
     clippy::indexing_slicing,
-    reason = "hot-path indexing is bounds-safe by construction: itable&511<512, buf_pos<HACKRF_BUF_BYTES, iword%60<60, code_phase%1023<1023"
+    reason = "hot-path indexing is bounds-safe by construction: itable&511<512, buf_pos<HACKRF_BUF_BYTES, iword%60<60, chip_idx<code_len"
 )]
 fn generate_iq(
     mut grx: GpsTime,
@@ -1208,6 +1277,8 @@ fn generate_iq(
     emit: &dyn Fn(SimEvent),
     mut log_file: Option<BufWriter<std::fs::File>>,
     fixed_gain: Option<i32>,
+    use_beidou: bool,
+    use_galileo: bool,
 ) {
     // When a motion file is provided, run for exactly the number of waypoints.
     // The `duration` cap only applies to fixed-position (no motion file) runs.
@@ -1216,7 +1287,9 @@ fn generate_iq(
     } else {
         waypoints.len()
     };
-    let eph_set = nav.eph.get(ieph).map(|s| s.as_slice()).unwrap_or(&[]);
+    let gps_eph_set = nav.gps.get(ieph).map(|s| s.as_slice()).unwrap_or(&[]);
+    let bds_eph_set = nav.beidou.get(ieph).map(|s| s.as_slice()).unwrap_or(&[]);
+    let gal_eph_set = nav.galileo.get(ieph).map(|s| s.as_slice()).unwrap_or(&[]);
 
     // Starting ECEF position: first waypoint, interactive start, or fixed location.
     let rx_ecef0 = waypoints.first().copied().unwrap_or(rx_ecef);
@@ -1225,16 +1298,45 @@ fn generate_iq(
     let mut cur_ecef = rx_ecef0;
 
     // ── Initial channel allocation ────────────────────────────────────────────
+    // GPS channels (always enabled).
     let mut channels: Vec<Channel> = (1u8..=32)
-        .filter(|&prn| eph_set.get(prn as usize - 1).is_some_and(|e| e.valid))
-        .filter(|prn| !blocked_prns.contains(prn)) // feature 8: PRN masking
+        .filter(|&prn| gps_eph_set.get(prn as usize - 1).is_some_and(|e| e.valid))
+        .filter(|prn| !blocked_prns.contains(prn))
         .filter_map(|prn| {
-            let eph = eph_set.get(prn as usize - 1)?;
-            Channel::new(prn, eph, &nav.iono, grx, rx_ecef0)
+            let eph = gps_eph_set.get(prn as usize - 1)?;
+            Channel::new(Constellation::Gps, prn, eph, &nav.iono, grx, rx_ecef0)
         })
         .filter(|ch| ch.azel[1] >= elev_mask)
-        .take(MAX_CHANNELS)
         .collect();
+
+    // BeiDou B1C channels (optional).
+    if use_beidou {
+        let bds_channels = (1u8..=63)
+            .filter(|&prn| bds_eph_set.get(prn as usize - 1).is_some_and(|e| e.valid))
+            .filter(|prn| !blocked_prns.contains(prn))
+            .filter_map(|prn| {
+                let eph = bds_eph_set.get(prn as usize - 1)?;
+                Channel::new(Constellation::BeiDou, prn, eph, &nav.iono, grx, rx_ecef0)
+            })
+            .filter(|ch| ch.azel[1] >= elev_mask);
+        channels.extend(bds_channels);
+    }
+
+    // Galileo E1-B channels (optional).
+    if use_galileo {
+        let gal_channels = (1u8..=36)
+            .filter(|&prn| gal_eph_set.get(prn as usize - 1).is_some_and(|e| e.valid))
+            .filter(|prn| !blocked_prns.contains(prn))
+            .filter_map(|prn| {
+                let eph = gal_eph_set.get(prn as usize - 1)?;
+                Channel::new(Constellation::Galileo, prn, eph, &nav.iono, grx, rx_ecef0)
+            })
+            .filter(|ch| ch.azel[1] >= elev_mask);
+        channels.extend(gal_channels);
+    }
+
+    // Cap total channels.
+    channels.truncate(MAX_CHANNELS);
 
     emit(SimEvent::Status(format!(
         "Tracking {} satellites at GPS week {} sec {:.1}\n",
@@ -1331,8 +1433,9 @@ fn generate_iq(
 
                 // ── Advance code phase ────────────────────────────────────────
                 ch.code_phase += ch.f_code * DT;
-                if ch.code_phase >= 1023.0 {
-                    ch.code_phase -= 1023.0;
+                let code_len_f = ch.code_len as f64;
+                if ch.code_phase >= code_len_f {
+                    ch.code_phase -= code_len_f;
                     ch.icode += 1;
                     if ch.icode >= 20 {
                         // Start of a new navigation bit.
@@ -1345,7 +1448,8 @@ fn generate_iq(
                         }
                         ch.data_bit = ((ch.dwrd[ch.iword] >> (29 - ch.ibit)) & 1) as i32 * 2 - 1;
                     }
-                    ch.code_ca = ch.ca[ch.code_phase as usize % 1023] as i32;
+                    let chip_idx = ch.code_phase as usize % ch.code_len;
+                    ch.code_ca = ch.code[chip_idx] as i32;
                 }
 
                 // ── Advance carrier phase ─────────────────────────────────────
@@ -1386,12 +1490,22 @@ fn generate_iq(
 
         // ── Update satellite positions every step ─────────────────────────────
         for ch in &mut channels {
-            if let Some(eph) = eph_set.get(ch.prn as usize - 1) {
+            let eph_slice = match ch.constellation {
+                Constellation::Gps => gps_eph_set,
+                Constellation::BeiDou => bds_eph_set,
+                Constellation::Galileo => gal_eph_set,
+            };
+            if let Some(eph) = eph_slice.get(ch.prn as usize - 1) {
                 if let Some(rho) = super::orbit::compute_range(eph, &nav.iono, grx, pos) {
                     // Update Doppler from the range rate.
                     let rho_rate = rho.rate;
                     ch.f_carr = -rho_rate / LAMBDA_L1;
-                    ch.f_code = CODE_FREQ_CA + ch.f_carr / CARR_TO_CODE;
+                    // Code rate = nominal chip rate + Doppler-scaled code correction.
+                    // The carrier-to-code ratio (1540 for GPS L1) maps carrier Doppler
+                    // to code Doppler.  For BeiDou and Galileo the ratio differs slightly
+                    // (B1C: 1540.0, E1: 1540.0 at 1575.42 MHz) but is unity at L1 for
+                    // all three; reuse CARR_TO_CODE as a good approximation.
+                    ch.f_code = ch.chip_rate + ch.f_carr / CARR_TO_CODE;
                     ch.azel = rho.azel;
                 }
             }
@@ -1583,17 +1697,17 @@ fn resolve_start_time(start: StartTime, nav: &NavData) -> GpsTime {
     }
 }
 
-/// Return the GPS time of the first valid satellite in the first ephemeris set.
+/// Return the GPS time of the first valid satellite in the first GPS ephemeris set.
 fn best_rinex_time(nav: &NavData) -> GpsTime {
-    nav.eph
+    nav.gps
         .first()
         .and_then(|set| set.iter().find(|e| e.valid).map(|e| e.toe))
         .unwrap_or_default()
 }
 
-/// Select the ephemeris set whose reference time is closest to `g0`.
+/// Select the GPS ephemeris set whose reference time is closest to `g0`.
 fn best_eph_set(nav: &NavData, g0: GpsTime) -> usize {
-    nav.eph
+    nav.gps
         .iter()
         .enumerate()
         .min_by_key(|(_, set)| {

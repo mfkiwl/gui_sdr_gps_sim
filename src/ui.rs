@@ -2284,6 +2284,31 @@ fn show_sim_settings_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                     .on_hover_text("e.g. 5,12,23  — leave empty to include all satellites.");
             });
 
+            ui.add_space(4.0);
+            section_title(ui, "Constellations");
+            ui.label(
+                egui::RichText::new(
+                    "All signals share the 1575.42 MHz carrier and are combined in the same IQ output. \
+                     BeiDou / Galileo require a RINEX 3 multi-GNSS file (e.g. BRDM*.rnx).",
+                )
+                .weak()
+                .small(),
+            );
+            ui.horizontal(|ui| {
+                // GPS L1 C/A is always enabled.
+                let mut gps_always = true;
+                ui.add_enabled(false, egui::Checkbox::new(&mut gps_always, "GPS L1 C/A"))
+                    .on_hover_text("GPS L1 C/A is always enabled and cannot be disabled.");
+                ui.checkbox(&mut app.sim_use_beidou, "BeiDou B1C  (1575.42 MHz)")
+                    .on_hover_text(
+                        "Include BeiDou B1C signals. Requires BeiDou ephemeris in the RINEX file.",
+                    );
+                ui.checkbox(&mut app.sim_use_galileo, "Galileo E1  (1575.42 MHz)")
+                    .on_hover_text(
+                        "Include Galileo E1-B signals. Requires Galileo ephemeris in the RINEX file.",
+                    );
+            });
+
             ui.horizontal(|ui| {
                 ui.checkbox(&mut app.sim_log_enable, "Position log:")
                     .on_hover_text("Write a CSV position log (time_s,lat_deg,lon_deg,height_m) during the simulation.");

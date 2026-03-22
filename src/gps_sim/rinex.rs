@@ -6,39 +6,64 @@
 //! # What is parsed
 //! - **Header**: ionospheric correction coefficients (α, β), UTC parameters,
 //!   leap seconds.
-//! - **Data records**: GPS satellite ephemeris (one record = 8 lines per SV).
+//! - **Data records**: GPS, `BeiDou`, and Galileo satellite ephemeris
+//!   (one record = 8 lines per SV in RINEX 3 multi-GNSS files).
 //!
 //! # Ephemeris grouping
 //! Records are grouped into *sets* by GPS time.  A new set is started when
 //! the epoch of the next record differs by more than one hour from the current
 //! set.  This lets the simulator pick the set whose reference time is closest
 //! to the desired start time.
+//!
+//! # `BeiDou` time note
+//! `BeiDou` System Time (BDT) epoch is 2006-01-01 00:00:00 UTC, which corresponds
+//! to GPS week 1356.  As of 2024 there is a 14 s leap-second offset between BDT
+//! and GPS time.  Parsed BDT epochs are converted to GPS time before storage.
 
 use flate2::read::GzDecoder;
 use std::io::{self, BufRead};
 
 use super::error::SimError;
-use super::types::{Ephemeris, GpsTime, IonoUtc, UtcDate, consts::MAX_EPH_SETS};
+use super::types::{Constellation, Ephemeris, GpsTime, IonoUtc, UtcDate, consts::MAX_EPH_SETS};
 
 // ── Public data types ─────────────────────────────────────────────────────────
 
 /// Parsed navigation data from a RINEX file.
 ///
-/// `eph` is indexed as `eph[set][prn - 1]`, where `set` is one of up to
-/// [`MAX_EPH_SETS`] hourly groups.  Only slots with `.valid == true` are usable.
+/// GPS ephemerides are in `gps`, indexed as `gps[set][prn - 1]`.
+/// `BeiDou` ephemerides are in `beidou`, indexed as `beidou[set][prn - 1]` (up to 63 SVs).
+/// Galileo ephemerides are in `galileo`, indexed as `galileo[set][prn - 1]` (up to 36 SVs).
+///
+/// The legacy `eph` field mirrors `gps` for backward compatibility with existing code
+/// that uses `nav.eph`.
 #[derive(Debug, Clone)]
 pub struct NavData {
-    /// Ephemeris sets, each covering approximately one hour.
-    pub eph: Vec<[Ephemeris; 32]>,
+    /// GPS ephemeris sets, each covering approximately one hour.
+    /// Indexed as `gps[set][prn - 1]` (PRNs 1–32).
+    pub gps: Vec<[Ephemeris; 32]>,
+    /// `BeiDou` ephemeris sets. Indexed as `beidou[set][prn - 1]` (PRNs 1–63).
+    pub beidou: Vec<[Ephemeris; 63]>,
+    /// Galileo ephemeris sets. Indexed as `galileo[set][prn - 1]` (PRNs 1–36).
+    pub galileo: Vec<[Ephemeris; 36]>,
     /// Ionospheric and UTC parameters from the header.
     pub iono: IonoUtc,
-    /// Number of loaded sets (= `eph.len()`).
+    /// Number of loaded GPS ephemeris sets (= `gps.len()`).
     pub count: usize,
+}
+
+impl NavData {
+    /// Compatibility accessor: borrow GPS ephemeris sets as a slice.
+    ///
+    /// This mirrors the pre-multi-constellation `nav.eph` field so that
+    /// existing call sites do not need immediate changes.
+    pub fn eph(&self) -> &[[Ephemeris; 32]] {
+        &self.gps
+    }
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-/// Load a RINEX 2 or 3 GPS navigation file.
+/// Load a RINEX 2 or 3 navigation file (GPS, `BeiDou`, Galileo).
 ///
 /// If `path` ends in `.gz`, the file is transparently decompressed with
 /// `flate2`.
@@ -46,7 +71,7 @@ pub struct NavData {
 /// # Errors
 /// - [`SimError::Io`] — file not found or read failure.
 /// - [`SimError::Rinex`] — malformed content.
-/// - [`SimError::NoEphemeris`] — file contained no usable GPS records.
+/// - [`SimError::NoEphemeris`] — file contained no usable records.
 pub fn load(path: &str) -> Result<NavData, SimError> {
     let file = std::fs::File::open(path)?;
     let reader: Box<dyn BufRead> = if path.ends_with(".gz") {
@@ -59,9 +84,14 @@ pub fn load(path: &str) -> Result<NavData, SimError> {
 
 // ── Parser ────────────────────────────────────────────────────────────────────
 
+/// Number of leap seconds between BDT epoch (2006-01-01) and GPS time as of 2024.
+const BDT_GPS_LEAP_SECS: f64 = 14.0;
+/// GPS week of the `BeiDou` epoch (2006-01-01 00:00:00 UTC = GPS week 1356).
+const BDT_GPS_WEEK_OFFSET: i32 = 1356;
+
 #[expect(
     clippy::too_many_lines,
-    reason = "RINEX parser necessarily handles many format variants in one pass"
+    reason = "RINEX parser necessarily handles many format variants and three constellations in one pass"
 )]
 #[expect(
     clippy::while_let_loop,
@@ -77,7 +107,7 @@ pub fn load(path: &str) -> Result<NavData, SimError> {
 )]
 #[expect(
     clippy::indexing_slicing,
-    reason = "fields[n] guarded by nf<28; current_set[prn-1] guarded by prn 1..=32; nums indexed after len check"
+    reason = "fields[n] guarded by nf<28; current_set[prn-1] guarded by prn range checks; nums indexed after len check"
 )]
 fn parse(reader: Box<dyn BufRead>) -> Result<NavData, SimError> {
     let mut lines = reader.lines();
@@ -138,11 +168,23 @@ fn parse(reader: Box<dyn BufRead>) -> Result<NavData, SimError> {
     }
 
     // ── Data section ─────────────────────────────────────────────────────────
-    let mut eph_sets: Vec<[Ephemeris; 32]> = Vec::new();
-    let mut current_set = [Ephemeris::default(); 32];
-    // GPS time of the epoch that started the current set (-1 week = none yet).
-    let mut g0 = GpsTime { week: -1, sec: 0.0 };
-    let mut set_count = 0usize;
+    // GPS ephemeris state.
+    let mut gps_sets: Vec<[Ephemeris; 32]> = Vec::new();
+    let mut gps_current = [Ephemeris::default(); 32];
+    let mut gps_g0 = GpsTime { week: -1, sec: 0.0 };
+    let mut gps_count = 0usize;
+
+    // BeiDou ephemeris state.
+    let mut bds_sets: Vec<[Ephemeris; 63]> = Vec::new();
+    let mut bds_current = [Ephemeris::default(); 63];
+    let mut bds_g0 = GpsTime { week: -1, sec: 0.0 };
+    let mut bds_count = 0usize;
+
+    // Galileo ephemeris state.
+    let mut gal_sets: Vec<[Ephemeris; 36]> = Vec::new();
+    let mut gal_current = [Ephemeris::default(); 36];
+    let mut gal_g0 = GpsTime { week: -1, sec: 0.0 };
+    let mut gal_count = 0usize;
 
     'records: loop {
         // Read the first line of the next satellite record.
@@ -154,22 +196,44 @@ fn parse(reader: Box<dyn BufRead>) -> Result<NavData, SimError> {
             continue;
         }
 
-        // Determine PRN and data-column offset (RINEX 2 vs 3 differ by 1 col).
-        let (prn, col0): (usize, usize) = if version >= 3.0 {
-            // RINEX 3 prefixes non-GPS constellations with E, R, C, …; skip them.
-            if !line.starts_with('G') {
-                for _ in 0..7 {
-                    let _skip: io::Result<String> = read_line(&mut lines);
+        // Determine constellation, PRN, and data-column offset.
+        let (constellation, prn, col0): (Constellation, usize, usize) = if version >= 3.0 {
+            // RINEX 3: first char is constellation, then 2-digit PRN.
+            let first = line.chars().next().unwrap_or(' ');
+            match first {
+                'G' => {
+                    let p = line[1..3].trim().parse::<usize>().unwrap_or(0);
+                    (Constellation::Gps, p, 4)
                 }
-                continue;
+                'C' => {
+                    let p = line[1..3].trim().parse::<usize>().unwrap_or(0);
+                    (Constellation::BeiDou, p, 4)
+                }
+                'E' => {
+                    let p = line[1..3].trim().parse::<usize>().unwrap_or(0);
+                    (Constellation::Galileo, p, 4)
+                }
+                _ => {
+                    // Skip unsupported constellations (GLONASS 'R', SBAS 'S', etc.).
+                    for _ in 0..7 {
+                        let _skip = read_line(&mut lines);
+                    }
+                    continue;
+                }
             }
-            let p = line[1..3].trim().parse::<usize>().unwrap_or(0);
-            (p, 4)
         } else {
+            // RINEX 2: GPS only, 2-digit PRN at column 0.
             let p = line[0..2].trim().parse::<usize>().unwrap_or(0);
-            (p, 3)
+            (Constellation::Gps, p, 3)
         };
-        if prn == 0 || prn > 32 {
+
+        // Validate PRN range per constellation.
+        let max_prn = match constellation {
+            Constellation::Gps => 32,
+            Constellation::BeiDou => 63,
+            Constellation::Galileo => 36,
+        };
+        if prn == 0 || prn > max_prn {
             continue;
         }
 
@@ -178,7 +242,20 @@ fn parse(reader: Box<dyn BufRead>) -> Result<NavData, SimError> {
             Ok(d) => d,
             Err(_) => continue,
         };
-        let t = date.to_gps();
+
+        // Convert to GPS time; apply BDT→GPS offset for BeiDou.
+        let t_raw = date.to_gps();
+        let t = match constellation {
+            Constellation::BeiDou => {
+                // BDT week 0 = GPS week 1356; BDT is 14 s behind GPS.
+                GpsTime {
+                    week: t_raw.week + BDT_GPS_WEEK_OFFSET,
+                    sec: t_raw.sec + BDT_GPS_LEAP_SECS,
+                }
+            }
+            Constellation::Gps | Constellation::Galileo => t_raw,
+        };
+
         let af0 = parse_f64_field(&line, col0 + 19, 19);
         let af1 = parse_f64_field(&line, col0 + 38, 19);
         let af2 = parse_f64_field(&line, col0 + 57, 19);
@@ -200,12 +277,13 @@ fn parse(reader: Box<dyn BufRead>) -> Result<NavData, SimError> {
             }
         }
         if nf < 24 {
-            continue;
-        } // incomplete record — skip
+            continue; // incomplete record — skip
+        }
 
-        // Build ephemeris struct.
+        // Build ephemeris struct (field layout identical for GPS/BeiDou/Galileo).
         let mut e = Ephemeris::default();
         e.valid = true;
+        e.constellation = constellation;
         e.iode = fields[0] as i32;
         e.crs = fields[1];
         e.deltan = fields[2];
@@ -214,10 +292,19 @@ fn parse(reader: Box<dyn BufRead>) -> Result<NavData, SimError> {
         e.ecc = fields[5];
         e.cus = fields[6];
         e.sqrta = fields[7];
-        // TOE: the seconds field is fields[8]; week comes from fields[18].
+        // TOE: seconds field from fields[8]; week from fields[18].
+        // For BeiDou, add the week offset so TOE is in GPS time.
+        let toe_week = match constellation {
+            Constellation::BeiDou => fields[18] as i32 + BDT_GPS_WEEK_OFFSET,
+            Constellation::Gps | Constellation::Galileo => fields[18] as i32,
+        };
+        let toe_sec = match constellation {
+            Constellation::BeiDou => fields[8] + BDT_GPS_LEAP_SECS,
+            Constellation::Gps | Constellation::Galileo => fields[8],
+        };
         e.toe = GpsTime {
-            week: fields[18] as i32,
-            sec: fields[8],
+            week: toe_week,
+            sec: toe_sec,
         };
         e.cic = fields[9];
         e.omg0 = fields[10];
@@ -233,6 +320,7 @@ fn parse(reader: Box<dyn BufRead>) -> Result<NavData, SimError> {
         if e.svh > 0 && e.svh < 32 {
             e.svh += 32;
         }
+        // For Galileo, fields[22] holds BGD(E5a,E1); reuse the tgd field.
         e.tgd = fields[22];
         e.iodc = fields[23] as i32;
         e.fit = if nf > 25 { fields[25] } else { 0.0 };
@@ -241,33 +329,87 @@ fn parse(reader: Box<dyn BufRead>) -> Result<NavData, SimError> {
         e.af2 = af2;
         e.toc = t;
 
-        // Start a new ephemeris set when the epoch gap exceeds one hour.
-        let dt = if g0.week < 0 { 7201.0 } else { t.sub(g0).abs() };
-        if dt > 3_600.0 {
-            if g0.week >= 0 {
-                eph_sets.push(current_set);
-                set_count += 1;
-                if set_count >= MAX_EPH_SETS {
-                    break;
+        // Store in the appropriate constellation bucket.
+        match constellation {
+            Constellation::Gps => {
+                let dt = if gps_g0.week < 0 {
+                    7201.0
+                } else {
+                    t.sub(gps_g0).abs()
+                };
+                if dt > 3_600.0 {
+                    if gps_g0.week >= 0 && gps_count < MAX_EPH_SETS {
+                        gps_sets.push(gps_current);
+                        gps_count += 1;
+                    }
+                    gps_g0 = t;
+                    gps_current = [Ephemeris::default(); 32];
                 }
+                gps_current[prn - 1] = e;
             }
-            g0 = t;
-            current_set = [Ephemeris::default(); 32];
+            Constellation::BeiDou => {
+                let dt = if bds_g0.week < 0 {
+                    7201.0
+                } else {
+                    t.sub(bds_g0).abs()
+                };
+                if dt > 3_600.0 {
+                    if bds_g0.week >= 0 && bds_count < MAX_EPH_SETS {
+                        bds_sets.push(bds_current);
+                        bds_count += 1;
+                    }
+                    bds_g0 = t;
+                    bds_current = [Ephemeris::default(); 63];
+                }
+                bds_current[prn - 1] = e;
+            }
+            Constellation::Galileo => {
+                let dt = if gal_g0.week < 0 {
+                    7201.0
+                } else {
+                    t.sub(gal_g0).abs()
+                };
+                if dt > 3_600.0 {
+                    if gal_g0.week >= 0 && gal_count < MAX_EPH_SETS {
+                        gal_sets.push(gal_current);
+                        gal_count += 1;
+                    }
+                    gal_g0 = t;
+                    gal_current = [Ephemeris::default(); 36];
+                }
+                gal_current[prn - 1] = e;
+            }
         }
-        current_set[prn - 1] = e;
     }
 
-    // Push the final (possibly partial) set.
-    if g0.week >= 0 {
-        eph_sets.push(current_set);
-        set_count += 1;
+    // Push the final (possibly partial) sets.
+    if gps_g0.week >= 0 {
+        gps_sets.push(gps_current);
+        gps_count += 1;
     }
-    if set_count == 0 {
+    if bds_g0.week >= 0 {
+        bds_sets.push(bds_current);
+        bds_count += 1;
+    }
+    if gal_g0.week >= 0 {
+        gal_sets.push(gal_current);
+        gal_count += 1;
+    }
+
+    // At least one constellation must have data.
+    if gps_count == 0 && bds_count == 0 && gal_count == 0 {
         return Err(SimError::NoEphemeris);
     }
+
+    log::debug!(
+        "RINEX loaded: {gps_count} GPS sets, {bds_count} BeiDou sets, {gal_count} Galileo sets",
+    );
+
     Ok(NavData {
-        count: set_count,
-        eph: eph_sets,
+        count: gps_count,
+        gps: gps_sets,
+        beidou: bds_sets,
+        galileo: gal_sets,
         iono,
     })
 }

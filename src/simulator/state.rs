@@ -32,6 +32,12 @@ pub struct SimSatInfo {
 pub struct SimSettings {
     /// Output sink selector.
     pub output_type: SimOutputType,
+    /// When `true`, `BeiDou` B1C signals are included in the simulation.
+    /// Defaults to `false` (GPS only).
+    pub use_beidou: bool,
+    /// When `true`, Galileo E1-B signals are included in the simulation.
+    /// Defaults to `false` (GPS only).
+    pub use_galileo: bool,
     /// Path to the IQ output file (used when `output_type == IqFile`).
     pub iq_file_path: String,
     /// UDP destination address (used when `output_type == Udp`), e.g. `"127.0.0.1:4567"`.

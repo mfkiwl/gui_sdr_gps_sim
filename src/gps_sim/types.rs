@@ -67,7 +67,8 @@ pub mod consts {
     pub const SAMPLES_PER_STEP: usize = (STEP_SECS / DT) as usize;
 
     /// Maximum number of simultaneously tracked satellites.
-    pub const MAX_CHANNELS: usize = 12;
+    /// Increased to 24 to support multi-constellation (GPS + `BeiDou` + Galileo).
+    pub const MAX_CHANNELS: usize = 24;
 
     /// Total number of GPS PRNs (1–32).
     pub const MAX_SATS: usize = 32;
@@ -79,6 +80,60 @@ pub mod consts {
     /// `HackRF` USB bulk transfer buffer size (bytes).
     /// Each buffer holds 262 144 interleaved signed 8-bit I/Q samples.
     pub const HACKRF_BUF_BYTES: usize = 262_144;
+}
+
+// ── GNSS constellation ────────────────────────────────────────────────────────
+
+/// Identifies which GNSS constellation a satellite belongs to.
+///
+/// All three supported constellations share the L1/B1C/E1 carrier at 1575.42 MHz,
+/// so their IQ contributions can be combined in a single output buffer.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
+)]
+pub enum Constellation {
+    /// GPS L1 C/A (IS-GPS-200, WGS-84 reference frame).
+    #[default]
+    Gps,
+    /// `BeiDou` B1C (BDS-SIS-ICD-B1C, CGCS2000 reference frame).
+    BeiDou,
+    /// Galileo E1-B (Galileo OS SIS ICD, GTRF reference frame).
+    Galileo,
+}
+
+impl Constellation {
+    /// Earth gravitational constant μ = GM (m³/s²) for this constellation's reference frame.
+    pub fn gm(self) -> f64 {
+        match self {
+            Self::Gps => 3.986_005e14,                        // WGS-84
+            Self::BeiDou | Self::Galileo => 3.986_004_418e14, // CGCS2000 / GTRF ≈ CGCS2000
+        }
+    }
+
+    /// Earth rotation rate (rad/s) for this constellation's reference frame.
+    pub fn omega_e(self) -> f64 {
+        match self {
+            Self::BeiDou => 7.292_115_0e-5, // CGCS2000 (slightly different)
+            Self::Gps | Self::Galileo => 7.292_115_146_7e-5, // WGS-84 / GTRF
+        }
+    }
+
+    /// Carrier frequency in Hz.
+    ///
+    /// All three supported signals share the 1575.42 MHz L1/B1C/E1 carrier so
+    /// they can be combined into the same IQ output buffer.
+    pub fn carrier_freq(self) -> f64 {
+        1_575_420_000.0 // L1 / B1C / E1 = 1575.42 MHz
+    }
+
+    /// Maximum defined PRN number for this constellation.
+    pub fn max_svs(self) -> u8 {
+        match self {
+            Self::Gps => 32,
+            Self::BeiDou => 63,
+            Self::Galileo => 36,
+        }
+    }
 }
 
 // ── GPS time ──────────────────────────────────────────────────────────────────
@@ -244,6 +299,9 @@ pub enum StartTime {
 pub struct Ephemeris {
     /// `true` if this slot contains valid data parsed from RINEX.
     pub valid: bool,
+
+    /// Which GNSS constellation this ephemeris belongs to.
+    pub constellation: Constellation,
 
     /// SV health word (0 = healthy; >31 = unhealthy per IS-GPS-200 §20.3.3.3).
     /// Values in (0, 32) have 32 added during parsing to set the MSB.
