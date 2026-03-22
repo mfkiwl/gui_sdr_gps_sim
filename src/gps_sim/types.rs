@@ -426,7 +426,10 @@ mod tests {
         let bds_oe = Constellation::BeiDou.omega_e();
         let gal_oe = Constellation::Galileo.omega_e();
         assert_ne!(bds_oe, gps_oe, "BeiDou omega_e should differ from GPS");
-        assert_eq!(gal_oe, gps_oe, "Galileo omega_e should match GPS (WGS-84/GTRF)");
+        assert_eq!(
+            gal_oe, gps_oe,
+            "Galileo omega_e should match GPS (WGS-84/GTRF)"
+        );
     }
 
     /// All three constellations share the 1575.42 MHz carrier.
@@ -450,10 +453,17 @@ mod tests {
     /// `add_secs` rolls the week counter forward at week boundary.
     #[test]
     fn add_secs_rolls_week_forward() {
-        let t = GpsTime { week: 100, sec: 604_799.9 };
+        let t = GpsTime {
+            week: 100,
+            sec: 604_799.9,
+        };
         let t2 = t.add_secs(0.2);
         assert_eq!(t2.week, 101);
-        assert!((t2.sec - 0.1).abs() < 1e-9, "sec after rollover: {}", t2.sec);
+        assert!(
+            (t2.sec - 0.1).abs() < 1e-9,
+            "sec after rollover: {}",
+            t2.sec
+        );
     }
 
     /// `add_secs` rolls the week counter backward.
@@ -469,7 +479,10 @@ mod tests {
     #[test]
     fn sub_across_week() {
         let a = GpsTime { week: 2, sec: 0.0 };
-        let b = GpsTime { week: 1, sec: 604_799.0 };
+        let b = GpsTime {
+            week: 1,
+            sec: 604_799.0,
+        };
         let diff = a.sub(b);
         assert!((diff - 1.0).abs() < 1e-9, "diff = {diff}");
     }
@@ -479,7 +492,14 @@ mod tests {
     /// GPS epoch (6 Jan 1980 00:00:00 UTC) must convert to week=0, sec=0.
     #[test]
     fn gps_epoch_converts_to_zero() {
-        let utc = UtcDate { year: 1980, month: 1, day: 6, hour: 0, min: 0, sec: 0.0 };
+        let utc = UtcDate {
+            year: 1980,
+            month: 1,
+            day: 6,
+            hour: 0,
+            min: 0,
+            sec: 0.0,
+        };
         let gps = utc.to_gps();
         assert_eq!(gps.week, 0, "GPS epoch should be week 0");
         assert!(gps.sec.abs() < 1e-9, "GPS epoch should be sec 0");
@@ -492,9 +512,19 @@ mod tests {
     /// separately in the RINEX parser, not here.
     #[test]
     fn bdt_epoch_calendar_is_gps_week_1356() {
-        let utc = UtcDate { year: 2006, month: 1, day: 1, hour: 0, min: 0, sec: 0.0 };
+        let utc = UtcDate {
+            year: 2006,
+            month: 1,
+            day: 1,
+            hour: 0,
+            min: 0,
+            sec: 0.0,
+        };
         let gps = utc.to_gps();
-        assert_eq!(gps.week, 1356, "BDT epoch calendar date should map to GPS week 1356");
+        assert_eq!(
+            gps.week, 1356,
+            "BDT epoch calendar date should map to GPS week 1356"
+        );
         // sec = 0 because UtcDate::to_gps does not apply leap seconds;
         // the +14 s GPST–BDT offset is applied in rinex.rs.
         assert!(gps.sec.abs() < 1e-9, "raw calendar sec should be 0");
@@ -503,11 +533,28 @@ mod tests {
     /// Two-digit year interpretation: ≥80 → 19xx, <80 → 20xx (RINEX 2 rule).
     #[test]
     fn two_digit_year_rinex2() {
-        let y80 = UtcDate { year: 80, month: 1, day: 6, hour: 0, min: 0, sec: 0.0 };
-        let y00 = UtcDate { year: 0, month: 1, day: 6, hour: 0, min: 0, sec: 0.0 };
+        let y80 = UtcDate {
+            year: 80,
+            month: 1,
+            day: 6,
+            hour: 0,
+            min: 0,
+            sec: 0.0,
+        };
+        let y00 = UtcDate {
+            year: 0,
+            month: 1,
+            day: 6,
+            hour: 0,
+            min: 0,
+            sec: 0.0,
+        };
         // year 80 → 1980, day 6 of Jan = GPS epoch → week 0
         assert_eq!(y80.to_gps().week, 0);
         // year 0 → 2000; 2000-01-06 is 20 years after GPS epoch ≈ week 1042
-        assert!(y00.to_gps().week > 1000, "year 2000 Jan 6 should be well past week 1000");
+        assert!(
+            y00.to_gps().week > 1000,
+            "year 2000 Jan 6 should be well past week 1000"
+        );
     }
 }

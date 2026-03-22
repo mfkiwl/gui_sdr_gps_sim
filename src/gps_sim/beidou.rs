@@ -213,7 +213,11 @@ mod tests {
     fn low_cross_correlation_prn1_prn2() {
         let c1 = generate_b1c_data(1);
         let c2 = generate_b1c_data(2);
-        let xcorr: i32 = c1.iter().zip(c2.iter()).map(|(&a, &b)| a as i32 * b as i32).sum();
+        let xcorr: i32 = c1
+            .iter()
+            .zip(c2.iter())
+            .map(|(&a, &b)| a as i32 * b as i32)
+            .sum();
         let threshold = (N as f64 * 0.05) as i32; // 5% of code length
         assert!(
             xcorr.unsigned_abs() <= threshold as u32,
