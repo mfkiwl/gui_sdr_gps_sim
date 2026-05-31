@@ -30,9 +30,7 @@ use super::rinex::NavData;
 use super::signal::{COS_TABLE, SIN_TABLE, ant_pattern_linear};
 use super::types::{
     Constellation, GpsTime, Location, StartTime,
-    consts::{
-        CARR_TO_CODE, HACKRF_BUF_BYTES, LAMBDA_L1, MAX_CHANNELS, SAMPLE_RATE, STEP_SECS,
-    },
+    consts::{CARR_TO_CODE, HACKRF_BUF_BYTES, LAMBDA_L1, MAX_CHANNELS, SAMPLE_RATE, STEP_SECS},
 };
 use super::{SdrOutput, SimError};
 
@@ -1389,7 +1387,10 @@ fn generate_iq(
         grx.week,
         grx.sec
     )));
-    emit(SimEvent::SimStart { week: grx.week, sec: grx.sec });
+    emit(SimEvent::SimStart {
+        week: grx.week,
+        sec: grx.sec,
+    });
 
     // Pre-compute linear antenna gain table (37 elevations at 5° steps).
     let ant = ant_pattern_linear();

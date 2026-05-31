@@ -215,7 +215,10 @@ fn run_static_loop_native(
                 if let SimEvent::SimStart { week, sec } = &e {
                     let mut g = cap.lock().unwrap_or_else(|e| e.into_inner());
                     if g.is_none() {
-                        *g = Some(GpsTime { week: *week, sec: *sec });
+                        *g = Some(GpsTime {
+                            week: *week,
+                            sec: *sec,
+                        });
                     }
                 }
                 handle_event(&e, &state2, &stop2);

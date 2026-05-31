@@ -687,9 +687,8 @@ impl GpsHackRf {
         // which is then rounded DOWN to 1.75 MHz — too narrow for the GPS C/A main lobe
         // (2.046 MHz null-to-null).  Explicitly set to 2× sample rate (= 6 MHz at 3 MSPS)
         // matching the C reference: TX_BW = TX_SAMPLERATE * 2.
-        let bw_hz = baseband_filter.unwrap_or_else(|| {
-            compute_baseband_filter_bw((rate * 2.0) as u32)
-        });
+        let bw_hz =
+            baseband_filter.unwrap_or_else(|| compute_baseband_filter_bw((rate * 2.0) as u32));
         self.inner.set_baseband_filter_bandwidth(bw_hz)?;
         self.inner.set_txvga_gain(gain_db.clamp(0, 47) as u16)?;
         self.inner.set_amp_enable(amp)?;

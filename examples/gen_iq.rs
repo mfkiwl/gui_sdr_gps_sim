@@ -10,7 +10,10 @@
 
 use gui_sdr_gps_sim::gps_sim::{Location, SdrOutput, Simulator};
 
-#[expect(clippy::print_stderr, reason = "example binary: progress output is the intended side effect")]
+#[expect(
+    clippy::print_stderr,
+    reason = "example binary: progress output is the intended side effect"
+)]
 fn main() {
     // Amsterdam – Centraal Station
     let lat = 52.3791;
