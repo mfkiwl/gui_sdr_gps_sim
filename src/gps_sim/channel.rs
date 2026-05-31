@@ -17,7 +17,7 @@ use super::navmsg;
 use super::orbit::{RangeResult, compute_range};
 use super::types::{
     Constellation, Ephemeris, GpsTime, IonoUtc,
-    consts::{CODE_FREQ_CA, SPEED_OF_LIGHT},
+    consts::{CARR_TO_CODE, CODE_FREQ_CA, LAMBDA_L1, SPEED_OF_LIGHT},
 };
 
 // Chip rates for each constellation (chips/s).
@@ -90,6 +90,10 @@ pub struct Channel {
     /// Azimuth and elevation of the satellite seen from the receiver (radians).
     pub azel: [f64; 2],
 
+    /// Geometric range satellite → receiver (metres), updated every step.
+    /// Used to compute the free-space path-loss gain factor.
+    pub d: f64,
+
     /// Which subframe 4/5 almanac page to broadcast next (0–24, cycled each 30 s).
     pub ipage: usize,
 }
@@ -135,14 +139,19 @@ impl Channel {
         // their own nav data databases for PVT.
         let sbf = navmsg::eph_to_subframes(eph, iono);
 
+        // Initialise Doppler from the pseudorange rate so the first 100 ms step
+        // already has the correct frequency offset, not a silent zero-Doppler artifact.
+        let f_carr = -rho.rate / LAMBDA_L1;
+        let f_code = chip_rate + f_carr / CARR_TO_CODE;
+
         let mut ch = Self {
             constellation,
             prn,
             code,
             code_len,
             chip_rate,
-            f_carr: 0.0,
-            f_code: chip_rate,
+            f_carr,
+            f_code,
             carr_phase: 0.0,
             code_phase: 0.0,
             iword: 0,
@@ -153,6 +162,7 @@ impl Channel {
             dwrd: [0u32; 60],
             sbf,
             azel: rho.azel,
+            d: rho.d,
             ipage: 0,
         };
 

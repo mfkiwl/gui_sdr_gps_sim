@@ -19,20 +19,24 @@ from gnuradio.filter import firdes
 from gnuradio.fft import window
 import sys
 import signal
-from PyQt5 import Qt
 from argparse import ArgumentParser
 from gnuradio.eng_arg import eng_float, intx
 from gnuradio import eng_notation
 import osmosdr
-import time
 import sip
 import threading
 
 
+def argument_parser():
+    p = ArgumentParser(description="GPS L1 C/A live HackRF RX analyzer")
+    p.add_argument("--device", default="hackrf=0",
+                   help="osmosdr device string (default: hackrf=0; use hackrf=1 for the second HackRF)")
+    return p
+
 
 class gps_l1_analyzer(gr.top_block, Qt.QWidget):
 
-    def __init__(self):
+    def __init__(self, device="hackrf=0"):
         gr.top_block.__init__(self, "GPS L1 C/A Signal Analyzer", catch_exceptions=True)
         Qt.QWidget.__init__(self)
         self.setWindowTitle("GPS L1 C/A Signal Analyzer")
@@ -278,17 +282,17 @@ class gps_l1_analyzer(gr.top_block, Qt.QWidget):
         self._qtgui_const_sink_x_0_win = sip.wrapinstance(self.qtgui_const_sink_x_0.qwidget(), Qt.QWidget)
         self.tabs_layout_3.addWidget(self._qtgui_const_sink_x_0_win)
         self.osmosdr_source_0 = osmosdr.source(
-            args="numchan=" + str(1) + " " + 'numchan=1 hackrf=0'
+            args=f"numchan=1 {device}"
         )
         self.osmosdr_source_0.set_sample_rate(samp_rate)
-        self.osmosdr_source_0.set_center_freq(100e6, 0)
+        self.osmosdr_source_0.set_center_freq(center_freq, 0)   # was 100e6 — WRONG
         self.osmosdr_source_0.set_freq_corr(0, 0)
         self.osmosdr_source_0.set_dc_offset_mode(0, 0)
         self.osmosdr_source_0.set_iq_balance_mode(0, 0)
         self.osmosdr_source_0.set_gain_mode(False, 0)
-        self.osmosdr_source_0.set_gain(0, 0)
-        self.osmosdr_source_0.set_if_gain(lna_gain, 0)
-        self.osmosdr_source_0.set_bb_gain(vga_gain, 0)
+        self.osmosdr_source_0.set_gain(lna_gain, 0)      # LNA / RF gain (0–40 dB)
+        self.osmosdr_source_0.set_if_gain(vga_gain, 0)   # VGA / IF gain (0–62 dB)
+        self.osmosdr_source_0.set_bb_gain(0, 0)
         self.osmosdr_source_0.set_antenna('', 0)
         self.osmosdr_source_0.set_bandwidth(samp_rate, 0)
         self._fft_avg_range = qtgui.Range(0.01, 1.0, 0.01, 0.1, 200)
@@ -320,7 +324,7 @@ class gps_l1_analyzer(gr.top_block, Qt.QWidget):
 
     def set_vga_gain(self, vga_gain):
         self.vga_gain = vga_gain
-        self.osmosdr_source_0.set_bb_gain(self.vga_gain, 0)
+        self.osmosdr_source_0.set_if_gain(self.vga_gain, 0)
 
     def get_samp_rate(self):
         return self.samp_rate
@@ -338,7 +342,7 @@ class gps_l1_analyzer(gr.top_block, Qt.QWidget):
 
     def set_lna_gain(self, lna_gain):
         self.lna_gain = lna_gain
-        self.osmosdr_source_0.set_if_gain(self.lna_gain, 0)
+        self.osmosdr_source_0.set_gain(self.lna_gain, 0)
 
     def get_fft_avg(self):
         return self.fft_avg
@@ -358,10 +362,12 @@ class gps_l1_analyzer(gr.top_block, Qt.QWidget):
 
 
 def main(top_block_cls=gps_l1_analyzer, options=None):
+    if options is None:
+        options = argument_parser().parse_args()
 
     qapp = Qt.QApplication(sys.argv)
 
-    tb = top_block_cls()
+    tb = top_block_cls(device=options.device)
 
     tb.start()
     tb.flowgraph_started.set()

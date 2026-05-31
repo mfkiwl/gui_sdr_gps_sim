@@ -48,7 +48,7 @@ Cross-platform desktop GUI app using [egui](https://github.com/emilk/egui) / [ef
 | `src/simulator/mod.rs` | Public API of the simulator module; also hosts `open_file_dialog()` |
 | `src/simulator/state.rs` | `SimSettings`, `SimState`, `SimStatus` — shared between worker and UI |
 | `src/simulator/worker.rs` | `run()` / `run_static_loop()` — thin wrappers that delegate to `gps_sim::Simulator` |
-| `src/gps_sim/` | GPS L1 C/A baseband signal simulator. Sub-modules: `types`, `coords`, `orbit`, `ionosphere`, `troposphere`, `codegen`, `navmsg`, `rinex`, `signal`, `fifo`, `hackrf`, `channel` (private), `sim` (private). Public entry point: `Simulator::builder()` |
+| `src/gps_sim/` | GPS L1 C/A baseband signal simulator. Sub-modules: `types`, `coords`, `orbit`, `ionosphere`, `troposphere`, `codegen`, `navmsg`, `rinex`, `signal`, `fifo`, `hackrf`, `channel` (private), `sim` (private). Public entry point: `Simulator::builder()`. See **GPS simulator notes** below. |
 | `src/rinex.rs` | Downloads today's broadcast RINEX nav file from CDDIS via anonymous FTPS |
 | `src/map_plugin.rs` | walkers `Plugin` impls: `ClickCapturePlugin`, `WaypointMarkerPlugin`, `RouteLinePlugin`, `EditableRoutePlugin`, `PolylinePlugin` |
 | `src/paths.rs` | `umf_dir()` / `waypoint_dir()` — create and return well-known working directories |
@@ -74,6 +74,32 @@ Cross-platform desktop GUI app using [egui](https://github.com/emilk/egui) / [ef
 8. Dynamic Mode shows a live-tracking map: `interpolate_route_pos()` in `ui.rs` derives the current geographic position from `current_step / total_steps` and centers the map on it each frame.
 
 **`SdrOutput` variants** (defined in `gps_sim/mod.rs`): `HackRf { gain_db, amp }`, `IqFile { path }`, `Null`, `PlutoSdr { host, gain_db }`, `UdpStream { addr }`, `TcpServer { port }`.
+
+**GPS simulator notes (`src/gps_sim/`):**
+
+*Sample rate auto-selection* — `Simulator::effective_sample_rate()` picks the IQ sample rate based on which constellations are enabled. `SimulatorBuilder::hackrf_sample_rate` always overrides:
+
+| Constellation | Chip rate | Auto rate | Samples/chip |
+|---|---|---|---|
+| GPS L1 C/A only | 1.023 Mcps | 3 MSPS | 2.93 |
+| Galileo E1-B | 4.092 Mcps | 10 MSPS | 2.44 |
+| BeiDou B1C | 10.23 Mcps | 20 MSPS | 1.95 (HackRF max) |
+
+The rate flows from `effective_sample_rate()` → each `run_*` backend → `generate_iq(sample_rate)`, which computes `dt = 1/rate` and `samples_per_step = STEP_SECS * rate` at runtime. The HackRF hardware is configured at the same rate to keep TX and IQ generation in sync.
+
+*Signal generation hot path* (`generate_iq` in `sim.rs`):
+- cos/sin lookup tables (`COS_TABLE`, `SIN_TABLE`): 512 entries, amplitude ±250
+- per-channel gain: `path_loss × ant_gain` (path_loss = 20200 km / range; ant_gain from `ant_pattern_linear()`)
+- per-sample: `i_acc += iq_sign * cos_tab[itable] * gain`, then `buf[pos] = (i_acc >> 4) as i8`
+- right-shift by 4 brings the summed ±(N×250) accumulator into the ±127 sc8 range
+- `chip_idx` and `code_ca` are updated **every sample** (not only at code-period boundaries)
+- carrier phase advanced by `f_carr * dt` each sample; code phase by `f_code * dt`
+
+*Antenna pattern* (`signal.rs`): osqzss 37-bin model, 0 dB at zenith, 31.56 dB attenuation at horizon (5° steps). `ant_pattern_linear()` converts the dB table to a linear voltage gain.
+
+*Channel initialisation* (`channel.rs`): `Channel::new()` sets the initial Doppler from the pseudorange rate: `f_carr = -rho.rate / LAMBDA_L1`, `f_code = chip_rate + f_carr / CARR_TO_CODE`. This ensures the first 100 ms step already has the correct frequency offset, not zero.
+
+*Known hard limit*: BeiDou B1C (10.23 Mcps) is slightly below Nyquist at 20 MSPS (1.95 samples/chip). Correct representation would need >20.46 MSPS, which exceeds HackRF hardware. GPS and Galileo are above Nyquist at their respective auto rates.
 
 **UI rendering pattern:**
 

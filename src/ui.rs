@@ -2224,8 +2224,9 @@ fn show_sim_settings_tab(app: &mut MyApp, ui: &mut egui::Ui) {
                 ui.add_enabled(
                     app.sim_fixed_gain_enable,
                     egui::DragValue::new(&mut app.sim_fixed_gain)
-                        .range(1..=10_000)
-                        .speed(10.0),
+                        .range(0.01..=10.0)
+                        .speed(0.05)
+                        .fixed_decimals(2),
                 );
             });
 

@@ -36,11 +36,14 @@ pub static SIN_TABLE: LazyLock<[i16; 512]> = LazyLock::new(|| {
 /// 37 entries at 5° steps: index 0 = zenith (0° from boresight = 90° elevation),
 /// index 36 = horizon (90° from boresight = 0° elevation).
 ///
-/// Source: GPS ICS-200 antenna model for a geodetic-grade patch antenna.
+/// Source: osqzss/gps-sdr-sim antenna model — attenuation increases toward the
+/// horizon (0 dB at zenith, 31.56 dB at horizon), matching the reference
+/// simulator used as the basis for this implementation.
 const ANT_PAT_DB: [f64; 37] = [
-    0.00, 0.00, 0.22, 0.44, 0.67, 1.11, 1.56, 2.22, 3.10, 4.67, 6.89, 9.56, 12.78, 14.67, 15.56,
-    15.56, 15.56, 15.56, 15.56, 15.56, 15.56, 15.56, 15.56, 15.56, 15.56, 15.56, 15.56, 15.56,
-    15.56, 15.56, 15.56, 15.56, 15.56, 15.56, 15.56, 15.56, 15.56,
+     0.00,  0.00,  0.22,  0.44,  0.67,  1.11,  1.56,  2.00,  2.44,  2.89,  3.56,  4.22,
+     4.89,  5.56,  6.22,  6.89,  7.56,  8.22,  8.89,  9.78, 10.67, 11.56, 12.44, 13.33,
+    14.44, 15.56, 16.67, 17.78, 18.89, 20.00, 21.33, 22.67, 24.00, 25.56, 27.33, 29.33,
+    31.56,
 ];
 
 /// Return the linear voltage gain for a satellite at `elevation_rad`.
@@ -132,7 +135,7 @@ mod tests {
         assert_relative_eq!(ant_gain(90_f64.to_radians()), 1.0, epsilon = 1e-10);
     }
 
-    /// Horizon gain (index 36, 15.56 dB loss) → linear ≈ 0.167.
+    /// Horizon gain (index 36, 31.56 dB loss) → linear ≈ 0.026.
     #[test]
     fn ant_gain_horizon() {
         let g = ant_gain(0.0);

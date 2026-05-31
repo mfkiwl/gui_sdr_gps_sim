@@ -61,7 +61,7 @@ pub struct SimSettings {
     pub ionospheric_disable: bool,
     /// When `Some`, disable path-loss calculations and hold all satellite
     /// signals at this constant gain level.
-    pub fixed_gain: Option<i32>,
+    pub fixed_gain: Option<f64>,
     /// RF centre frequency in Hz transmitted by the `HackRF`.
     /// Default is GPS L1 C/A (1 575 420 000 Hz).
     pub center_frequency: u64,

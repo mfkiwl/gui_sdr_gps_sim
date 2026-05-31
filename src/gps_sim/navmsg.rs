@@ -263,10 +263,12 @@ pub fn generate_nav_msg(sbf: &[[u32; 10]; 53], grx: GpsTime, ipage: usize) -> [u
                 word = (word & !(0x1FFFF << 13)) | ((tow & 0x1FFFF) << 13);
             }
 
-            // Prepend D29*/D30* carry bits from the previous word (bits 31–30).
-            // The parity computation expects them in bits 31–30 of `source`.
-            word = (word & 0x3FFF_FFFF) | ((prev_word & 0xC000_0000) >> 2);
-            let d30_star = (prev_word >> 30) & 1 == 1;
+            // D29* = D29 parity bit of prev_word = bit 1.
+            // D30* = D30 parity bit of prev_word = bit 0.
+            // Place them into bits 31–30 of the new word (as the parity algorithm expects).
+            // Matches osqzss: sbfwrd |= (prevwrd<<30) & 0xC0000000UL
+            word = (word & 0x3FFF_FFFF) | ((prev_word << 30) & 0xC000_0000);
+            let d30_star = (prev_word & 0x1) == 1;
 
             let checked = compute_checksum(word, d30_star);
             dwrd[base + w] = checked;

@@ -74,6 +74,60 @@ Start at 20 dB and increase if the receiving GPS device doesn't get a fix.
 
 ---
 
+## `gps_iq_file_analyzer` — IQ file signal analyser (no hardware needed)
+
+Reads an IQ file written by the app's **IQ File** output mode and displays
+the same four analysis panels (FFT, waterfall, time domain, constellation)
+without requiring a second HackRF or any radio hardware.
+
+### Step 1 — generate the IQ file
+
+In gui_sdr_gps_sim set **Output = IQ File**, enter a path (e.g. `gps_signal.iq`),
+set **Duration** to 30 s, then click **Start**.  The app writes sc8 samples at
+real-time pace (~30 s wall clock, ~180 MB file).
+
+### Step 2 — run the analyser
+
+```bash
+# Default file name (gps_signal.iq) and sample rate (3 MSPS)
+python gps_iq_file_analyzer.py
+
+# Custom file and/or rate
+python gps_iq_file_analyzer.py path/to/my_signal.iq --rate 4M
+```
+
+The file loops continuously so the displays stay live.
+
+### Signal path
+
+```
+[IQ file on disk]
+      │  sc8: interleaved signed-8-bit I/Q  [I0,Q0,I1,Q1,…]
+      │
+[blocks_file_source]      (repeat=True → file loops)
+      │
+[interleaved_char_to_complex  ×1/128]   i8 → complex float ±1.0
+      │
+[throttle  @  samp_rate]   paces playback to real time
+      │
+      ├──► [qtgui_freq_sink_c]          Tab 0 — FFT spectrum
+      ├──► [qtgui_waterfall_sink_c]     Tab 1 — Waterfall
+      ├──► [keep_one_in_n ×100]
+      │        └──► [qtgui_time_sink_c] Tab 2 — Time domain (~30 kHz)
+      └──► [qtgui_const_sink_c]         Tab 3 — IQ constellation
+```
+
+### What to look for
+
+| View | Good signal | Bad signal |
+|---|---|---|
+| **FFT Spectrum** | Flat plateau ~2 MHz wide (GPS C/A null-to-null), gentle sidelobes, no DC spike | DC spike only, very narrow peak, or flat noise floor |
+| **Waterfall** | Steady horizontal band ~2 MHz wide, time-invariant | No band, or sweeping/variable feature |
+| **Time Domain** | Band-limited noise appearance, I and Q of similar amplitude | Clipped flat-tops (saturation), or zero output |
+| **Constellation** | Roughly circular cloud, radius ~0.7–1.0 (good 8-bit quantisation) | Tiny dot (too quiet), rectangular blob (clipping), or ring-only (IQ imbalance) |
+
+---
+
 ## `gps_l1_analyzer` — HackRF RX spectrum analyzer
 
 Standalone receiver using a **second HackRF in RX mode**. Useful for verifying

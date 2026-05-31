@@ -172,27 +172,54 @@ fn run_static_loop_native(
     state: &Arc<Mutex<SimState>>,
     stop: &Arc<AtomicBool>,
 ) {
-    use crate::gps_sim::{Location, Simulator};
+    use crate::gps_sim::{GpsTime, Location, SimEvent, Simulator, StartTime};
 
     let rinex_str = rinex_path.to_string_lossy().into_owned();
     let output = build_output(settings);
     let duration = loop_duration.max(1.0) as u32;
 
+    // Capture the GPS start time emitted by the first pass so subsequent passes
+    // can continue from where the previous one ended.  Without this, every pass
+    // restarts at the RINEX epoch and the GPS receiver sees a time rollback every
+    // `loop_duration` seconds, which prevents it from maintaining lock.
+    let base_g0: Arc<Mutex<Option<GpsTime>>> = Arc::new(Mutex::new(None));
+
     let mut loop_count = 0usize;
 
     while !stop.load(Ordering::Relaxed) {
+        // First pass: use the configured start time (RINEX epoch when "now" is selected).
+        // Subsequent passes: advance GPS time by loop_count × duration to maintain continuity.
+        let start_time = {
+            let g = base_g0.lock().unwrap_or_else(|e| e.into_inner());
+            match *g {
+                None => parse_start_time(&settings.start_time),
+                Some(g0) => StartTime::Gps(g0.add_secs(loop_count as f64 * f64::from(duration))),
+            }
+        };
+
         let state2 = Arc::clone(state);
         let state3 = Arc::clone(state);
         let stop2 = Arc::clone(stop);
+        let cap = Arc::clone(&base_g0);
 
         let builder = Simulator::builder()
             .rinex(rinex_str.clone())
             .location(Location::degrees(lat, lon, alt))
             .duration_secs(duration)
-            .start_time(parse_start_time(&settings.start_time))
+            .start_time(start_time)
             .output(output.clone())
             .with_stop(Arc::clone(stop))
-            .on_event(move |e| handle_event(&e, &state2, &stop2))
+            .on_event(move |e| {
+                // Capture the actual GPS start time from pass 0 so subsequent passes
+                // continue from the correct epoch instead of resetting to the RINEX epoch.
+                if let SimEvent::SimStart { week, sec } = &e {
+                    let mut g = cap.lock().unwrap_or_else(|e| e.into_inner());
+                    if g.is_none() {
+                        *g = Some(GpsTime { week: *week, sec: *sec });
+                    }
+                }
+                handle_event(&e, &state2, &stop2);
+            })
             .ppb(settings.ppb)
             .elevation_mask_deg(settings.elevation_mask_deg)
             .block_prns(settings.blocked_prns.clone())

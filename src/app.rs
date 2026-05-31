@@ -212,8 +212,9 @@ pub struct MyApp {
     pub sim_fixed_gain_enable: bool,
 
     /// Fixed gain value used when `sim_fixed_gain_enable` is true (not persisted).
+    /// `1.0` matches the C reference signal level; higher values overdrive the DAC.
     #[serde(skip)]
-    pub sim_fixed_gain: i32,
+    pub sim_fixed_gain: f64,
 
     /// RF centre frequency in Hz (not persisted).
     #[serde(skip)]
@@ -569,7 +570,7 @@ impl Default for MyApp {
             sim_time_override: false,
             sim_ionospheric_disable: false,
             sim_fixed_gain_enable: false,
-            sim_fixed_gain: 1000,
+            sim_fixed_gain: 1.0,
             sim_center_freq: 1_575_420_000,
             sim_baseband_filter_enable: false,
             sim_baseband_filter: 1_750_000,

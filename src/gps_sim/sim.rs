@@ -31,7 +31,7 @@ use super::signal::{COS_TABLE, SIN_TABLE, ant_pattern_linear};
 use super::types::{
     Constellation, GpsTime, Location, StartTime,
     consts::{
-        CARR_TO_CODE, DT, HACKRF_BUF_BYTES, LAMBDA_L1, MAX_CHANNELS, SAMPLES_PER_STEP, STEP_SECS,
+        CARR_TO_CODE, HACKRF_BUF_BYTES, LAMBDA_L1, MAX_CHANNELS, SAMPLE_RATE, STEP_SECS,
     },
 };
 use super::{SdrOutput, SimError};
@@ -71,6 +71,12 @@ pub enum SimEvent {
         total_steps: usize,
         bytes_sent: u64,
     },
+    /// GPS time at which the simulation started (emitted once, before the first IQ step).
+    ///
+    /// Intended for static-loop callers: capture `week`/`sec` from pass 0, then
+    /// pass `StartTime::Gps(GpsTime { week, sec }.add_secs(loop_count * duration_secs))`
+    /// on subsequent passes so the receiver sees a continuous GPS timeline.
+    SimStart { week: i32, sec: f64 },
     /// Simulation has finished normally.
     Done,
 }
@@ -216,7 +222,7 @@ pub struct SimulatorBuilder {
     external_istate: Option<Arc<Mutex<InteractiveState>>>,
     ionospheric_disable: bool,
     time_override: bool,
-    fixed_gain: Option<i32>,
+    fixed_gain: Option<f64>,
     leap: Option<(i32, i32, i32)>,
     hackrf_sample_rate: Option<f64>,
     hackrf_center_freq: Option<u64>,
@@ -407,7 +413,7 @@ impl SimulatorBuilder {
     ///
     /// When `Some(v)`, all satellite signals are transmitted at the same
     /// constant amplitude `v` regardless of elevation or distance.
-    pub fn fixed_gain(mut self, gain: Option<i32>) -> Self {
+    pub fn fixed_gain(mut self, gain: Option<f64>) -> Self {
         self.fixed_gain = gain;
         self
     }
@@ -556,7 +562,7 @@ pub struct Simulator {
     external_istate: Option<Arc<Mutex<InteractiveState>>>,
     ionospheric_disable: bool,
     time_override: bool,
-    fixed_gain: Option<i32>,
+    fixed_gain: Option<f64>,
     leap: Option<(i32, i32, i32)>,
     hackrf_sample_rate: Option<f64>,
     hackrf_center_freq: Option<u64>,
@@ -588,6 +594,28 @@ impl Simulator {
     /// ```
     pub fn stop_handle(&self) -> Arc<AtomicBool> {
         self.stop.clone()
+    }
+
+    /// Select the IQ sample rate appropriate for the active constellations.
+    ///
+    /// | Constellation | Chip rate | Min rate | Auto-selected |
+    /// |---|---|---|---|
+    /// | GPS L1 C/A | 1.023 Mcps | 2.05 MSPS | **3 MSPS** |
+    /// | Galileo E1-B | 4.092 Mcps | 8.18 MSPS | **10 MSPS** (2.44 samps/chip) |
+    /// | `BeiDou` B1C | 10.23 Mcps | 20.46 MSPS | **20 MSPS** (`HackRF` max, 1.95 samps/chip) |
+    ///
+    /// A manually-set [`SimulatorBuilder::hackrf_sample_rate`] always takes precedence.
+    fn effective_sample_rate(&self) -> f64 {
+        if let Some(rate) = self.hackrf_sample_rate {
+            return rate;
+        }
+        if self.use_beidou {
+            20_000_000.0 // BeiDou B1C needs ~20.46 MSPS; 20 MSPS is the HackRF maximum
+        } else if self.use_galileo {
+            10_000_000.0 // Galileo E1-B needs ~8.18 MSPS; 10 MSPS gives 2.44 samples/chip
+        } else {
+            SAMPLE_RATE // GPS L1 C/A: 3 MSPS gives 2.93 samples/chip
+        }
     }
 
     /// Run the simulation on a background OS thread and return a [`SimulatorHandle`].
@@ -789,11 +817,13 @@ impl Simulator {
         log_file: Option<BufWriter<std::fs::File>>,
     ) -> Result<(), SimError> {
         let mut dev = super::hackrf::GpsHackRf::open()?;
+        // Compute IQ rate first so HackRF hardware and sample generation stay in sync.
+        let sample_rate = self.effective_sample_rate();
         dev.configure(
             gain_db,
             amp,
             self.ppb,
-            self.hackrf_sample_rate,
+            Some(sample_rate),
             self.hackrf_center_freq,
             self.hackrf_baseband_filter,
         )?;
@@ -842,6 +872,7 @@ impl Simulator {
                     fixed_gain,
                     use_beidou,
                     use_galileo,
+                    sample_rate,
                 );
                 producer.shutdown();
             })
@@ -900,6 +931,7 @@ impl Simulator {
         log_file: Option<BufWriter<std::fs::File>>,
     ) -> Result<(), SimError> {
         let mut file = std::fs::File::create(path)?;
+        let sample_rate = self.effective_sample_rate();
 
         let emit: Arc<dyn Fn(SimEvent) + Send + Sync> = if let Some(f) = self.on_event {
             Arc::new(f)
@@ -945,6 +977,7 @@ impl Simulator {
                     fixed_gain,
                     use_beidou,
                     use_galileo,
+                    sample_rate,
                 );
                 producer.shutdown();
             })
@@ -974,6 +1007,7 @@ impl Simulator {
         istate: Option<Arc<Mutex<InteractiveState>>>,
         log_file: Option<BufWriter<std::fs::File>>,
     ) -> Result<(), SimError> {
+        let sample_rate = self.effective_sample_rate();
         let emit: Arc<dyn Fn(SimEvent) + Send + Sync> = if let Some(f) = self.on_event {
             Arc::new(f)
         } else {
@@ -1016,6 +1050,7 @@ impl Simulator {
                     fixed_gain,
                     use_beidou,
                     use_galileo,
+                    sample_rate,
                 );
                 producer.shutdown();
             })
@@ -1071,6 +1106,7 @@ impl Simulator {
         sock.connect(addr)
             .map_err(|e| SimError::Network(format!("UDP connect to {addr}: {e}")))?;
 
+        let sample_rate = self.effective_sample_rate();
         let emit: Arc<dyn Fn(SimEvent) + Send + Sync> = if let Some(f) = self.on_event {
             Arc::new(f)
         } else {
@@ -1113,6 +1149,7 @@ impl Simulator {
                     fixed_gain,
                     use_beidou,
                     use_galileo,
+                    sample_rate,
                 );
                 producer.shutdown();
             })
@@ -1162,6 +1199,7 @@ impl Simulator {
             .map_err(|e| SimError::Network(format!("TCP accept: {e}")))?;
         log::info!("TCP: client connected from {peer}");
 
+        let sample_rate = self.effective_sample_rate();
         let emit: Arc<dyn Fn(SimEvent) + Send + Sync> = if let Some(f) = self.on_event {
             Arc::new(f)
         } else {
@@ -1204,6 +1242,7 @@ impl Simulator {
                     fixed_gain,
                     use_beidou,
                     use_galileo,
+                    sample_rate,
                 );
                 producer.shutdown();
             })
@@ -1276,10 +1315,16 @@ fn generate_iq(
     producer: &super::fifo::IqProducer,
     emit: &dyn Fn(SimEvent),
     mut log_file: Option<BufWriter<std::fs::File>>,
-    fixed_gain: Option<i32>,
+    fixed_gain: Option<f64>,
     use_beidou: bool,
     use_galileo: bool,
+    sample_rate: f64,
 ) {
+    // Derive timing constants from the runtime sample rate so that GPS (3 MSPS),
+    // Galileo (10 MSPS), and BeiDou (20 MSPS) all advance their codes correctly.
+    let dt = 1.0 / sample_rate;
+    let samples_per_step = (STEP_SECS * sample_rate) as usize;
+    let bytes_per_step = (STEP_SECS * sample_rate * 2.0) as u64;
     // When a motion file is provided, run for exactly the number of waypoints.
     // The `duration` cap only applies to fixed-position (no motion file) runs.
     let total_steps = if waypoints.is_empty() {
@@ -1344,6 +1389,7 @@ fn generate_iq(
         grx.week,
         grx.sec
     )));
+    emit(SimEvent::SimStart { week: grx.week, sec: grx.sec });
 
     // Pre-compute linear antenna gain table (37 elevations at 5° steps).
     let ant = ant_pattern_linear();
@@ -1394,23 +1440,26 @@ fn generate_iq(
         let step_start = Instant::now();
 
         // ── Per-channel gain for this step ────────────────────────────────────
-        // Amplitude = path-loss × antenna gain, scaled to an integer multiplier.
-        // Path loss is normalised to GPS nominal altitude (20 200 km).
-        let gains: Vec<i32> = channels
+        // Matches the C reference (multi-sdr-gps-sim):
+        //   gain[i] = path_loss * ant_gain   (double, ≈ 0.1 – 1.0)
+        //
+        // path_loss = 20 200 km / geometric_range  (normalised to GPS altitude)
+        // ant_gain  = linear voltage gain from the 37-bin elevation pattern
+        //
+        // The lookup tables are ±250 integers.  With gain ≈ 1.0 the per-sample
+        // accumulation across ≤24 channels stays near ±6000, and after the >>4
+        // right-shift the 8-bit output is in the correct range.
+        let gains: Vec<f64> = channels
             .iter()
             .map(|ch| {
                 if let Some(fg) = fixed_gain {
                     fg
                 } else {
+                    let path_loss = 20_200_000.0 / ch.d;
                     let el_deg = ch.azel[1].to_degrees();
                     let boresight_idx = ((90.0 - el_deg) / 5.0) as usize;
                     let ant_g = ant.get(boresight_idx.min(36)).copied().unwrap_or(1.0);
-                    // LUT amplitude is ±250.  With ≤12 channels and gain=1 the
-                    // accumulator stays within ±3000, then >>4 gives ±187 which
-                    // clips harmlessly to i8.  Scale by ant_g (∈ [0.167,1.0]) via
-                    // a Q4 fixed-point multiplier so low-elevation SVs are quieter.
-                    // gain range: [2..16] → max sum ≤ 12×250×16 = 48 000, >>4 = 3000.
-                    (ant_g * 16.0) as i32
+                    path_loss * ant_g
                 }
             })
             .collect();
@@ -1420,7 +1469,7 @@ fn generate_iq(
         let cos_tab = &*COS_TABLE;
         let sin_tab = &*SIN_TABLE;
 
-        for _ in 0..SAMPLES_PER_STEP {
+        for _ in 0..samples_per_step {
             let mut i_acc = 0i32;
             let mut q_acc = 0i32;
 
@@ -1428,11 +1477,13 @@ fn generate_iq(
                 // Look up carrier phase.
                 let itable = (ch.carr_phase * 512.0) as usize & 511;
                 let iq_sign = ch.data_bit * ch.code_ca;
-                i_acc += iq_sign * cos_tab[itable] as i32 * gain;
-                q_acc += iq_sign * sin_tab[itable] as i32 * gain;
+                // Multiply table value (int) by floating-point gain, matching the C
+                // reference: ip = dataBit * codeCA * cosTable[i] * gain[i]
+                i_acc += (iq_sign as f64 * cos_tab[itable] as f64 * gain) as i32;
+                q_acc += (iq_sign as f64 * sin_tab[itable] as f64 * gain) as i32;
 
                 // ── Advance code phase ────────────────────────────────────────
-                ch.code_phase += ch.f_code * DT;
+                ch.code_phase += ch.f_code * dt;
                 let code_len_f = ch.code_len as f64;
                 if ch.code_phase >= code_len_f {
                     ch.code_phase -= code_len_f;
@@ -1448,12 +1499,15 @@ fn generate_iq(
                         }
                         ch.data_bit = ((ch.dwrd[ch.iword] >> (29 - ch.ibit)) & 1) as i32 * 2 - 1;
                     }
-                    let chip_idx = ch.code_phase as usize % ch.code_len;
-                    ch.code_ca = ch.code[chip_idx] as i32;
                 }
+                // Update the spreading chip from the continuous code-phase accumulator
+                // every sample (not just at code-period boundaries).  code_phase ∈ [0,
+                // code_len) so the integer part is the current chip index.
+                let chip_idx = ch.code_phase as usize % ch.code_len;
+                ch.code_ca = ch.code[chip_idx] as i32;
 
                 // ── Advance carrier phase ─────────────────────────────────────
-                ch.carr_phase += ch.f_carr * DT;
+                ch.carr_phase += ch.f_carr * dt;
                 if ch.carr_phase >= 1.0 {
                     ch.carr_phase -= 1.0;
                 } else if ch.carr_phase < 0.0 {
@@ -1507,6 +1561,7 @@ fn generate_iq(
                     // all three; reuse CARR_TO_CODE as a good approximation.
                     ch.f_code = ch.chip_rate + ch.f_carr / CARR_TO_CODE;
                     ch.azel = rho.azel;
+                    ch.d = rho.d;
                 }
             }
         }
@@ -1524,7 +1579,7 @@ fn generate_iq(
         emit(SimEvent::Progress {
             current_step: step,
             total_steps,
-            bytes_sent: wall_step.saturating_mul(600_000),
+            bytes_sent: wall_step.saturating_mul(bytes_per_step),
         });
 
         // ── Emit position and satellite events ────────────────────────────────
