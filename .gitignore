@@ -16,3 +16,10 @@ target_wasm
 umf/
 waypoint/
 Rinex_files/
+
+# raw IQ captures — large binaries, regenerate with examples/gen_iq.rs or hackrf_transfer
+*.iq
+tx_log.txt
+
+# Python bytecode from the gnuradio analysis scripts
+__pycache__/
