@@ -37,8 +37,20 @@ Cross-platform desktop GUI app using [egui](https://github.com/emilk/egui) / [ef
 |---|---|
 | `src/main.rs` | Native entry point — window config, icon, image loaders, `setup_fonts()` (loads system symbol font as fallback for ▲▼) |
 | `src/lib.rs` | Module declarations; re-exports `MyApp` |
-| `src/app.rs` | `MyApp` struct, `AppPage` / `AppStatus` enums, `Default`, `eframe::App` |
-| `src/ui.rs` | All UI rendering — delegates from `eframe::App::update` |
+| `src/app/mod.rs` | `MyApp` struct (all serde-persisted fields), `Default`, `MyApp::new`, `eframe::App` |
+| `src/app/state.rs` | `AppPage` / `RouteSource` / `SimTab` / `AppStatus` enums |
+| `src/app/routes.rs` | `impl MyApp` — `generate()` and the three route-generation paths (ORS, drawn, GeoJSON) |
+| `src/app/library.rs` | `impl MyApp` — scanning, loading, editing, and deleting route-library entries |
+| `src/app/waypoints.rs` | `impl MyApp` — waypoint load/save/edit/delete |
+| `src/app/simulation.rs` | `impl MyApp` — `start_*_simulation()`, `download_rinex*()`, `parse_blocked_prns()` |
+| `src/ui/mod.rs` | `update()` — the per-frame entry point; polls background tasks, then delegates |
+| `src/ui/chrome.rs` | Menu bar, API-key dialog, nav sidebar, `navigate()`, central-panel dispatch. **All `include_image!` macros live here**, so asset paths are `../../assets/img/` |
+| `src/ui/widgets.rs` | Helpers shared across pages: `page_heading`, `section_title`, `add_map_zoom_controls`, `sortable_header_text`, `format_duration` |
+| `src/ui/home.rs` | Home page + `home_card()` |
+| `src/ui/route.rs` | Create UMF Route page, its maps, and `RoutePageActions` |
+| `src/ui/waypoints.rs` | Manage Waypoints page, table, add form, and `WaypointPageActions` |
+| `src/ui/library.rs` | Manage UMF Routes page, library table, and `RouteLibraryActions` |
+| `src/ui/sim/` | SDR GPS Simulator page: `mod.rs` (tab bar) + `dynamic`, `fixed`, `interactive`, `settings` |
 | `src/waypoint.rs` | `Waypoint` / `WaypointEntry` types; free-fn `load_waypoints` / `save_waypoints` |
 | `src/geo.rs` | `parse_coords`, `lla_to_ecef` (WGS-84), `write_transmit_points_to_csv` |
 | `src/route/ors.rs` | Async HTTP client for the OpenRouteService directions API |
@@ -71,19 +83,23 @@ Cross-platform desktop GUI app using [egui](https://github.com/emilk/egui) / [ef
 5. The `on_event` callback translates `SimEvent::Progress` into `SimState` updates (`current_step`, `total_steps`, `bytes_sent`). The UI polls `Arc<Mutex<SimState>>` each frame.
 6. The user can cancel at any time via `Arc<AtomicBool>` stop flag passed to the simulator.
 7. Static mode loops indefinitely (each pass re-creates the `Simulator`); `SimState::loop_count` tracks iterations.
-8. Dynamic Mode shows a live-tracking map: `interpolate_route_pos()` in `ui.rs` derives the current geographic position from `current_step / total_steps` and centers the map on it each frame.
+8. Dynamic Mode shows a live-tracking map: `interpolate_route_pos()` in `ui/sim/dynamic.rs` derives the current geographic position from `current_step / total_steps` and centers the map on it each frame.
 
 **`SdrOutput` variants** (defined in `gps_sim/mod.rs`): `HackRf { gain_db, amp }`, `IqFile { path }`, `Null`, `PlutoSdr { host, gain_db }`, `UdpStream { addr }`, `TcpServer { port }`.
 
 **GPS simulator notes (`src/gps_sim/`):**
 
-*Sample rate auto-selection* — `Simulator::effective_sample_rate()` picks the IQ sample rate based on which constellations are enabled. `SimulatorBuilder::hackrf_sample_rate` always overrides:
+*Sample rate auto-selection* — `select_sample_rate(override, widest_constellation, output)` in `sim.rs` picks the IQ sample rate from the enabled constellations **and the output sink**. `SimulatorBuilder::hackrf_sample_rate` always overrides.
 
-| Constellation | Chip rate | Auto rate | Samples/chip |
-|---|---|---|---|
-| GPS L1 C/A only | 1.023 Mcps | 3 MSPS | 2.93 |
-| Galileo E1-B | 4.092 Mcps | 10 MSPS | 2.44 |
-| BeiDou B1C | 10.23 Mcps | 20 MSPS | 1.95 (HackRF max) |
+Each constellation declares `chip_rate()`, `nyquist_rate()` (= 2 × chip rate), and `preferred_sample_rate()` in `types.rs`. The preferred rate is then clamped by `SdrOutput::max_sample_rate()`, which is `Some(20 MSPS)` for HackRF and PlutoSDR and `None` for IqFile / UdpStream / TcpServer / Null:
+
+| Constellation | Chip rate | Nyquist | Preferred | On HackRF/Pluto | Samples/chip |
+|---|---|---|---|---|---|
+| GPS L1 C/A only | 1.023 Mcps | 2.05 MSPS | 3 MSPS | 3 MSPS | 2.93 |
+| Galileo E1-B | 4.092 Mcps | 8.18 MSPS | 10 MSPS | 10 MSPS | 2.44 |
+| BeiDou B1C | 10.23 Mcps | 20.46 MSPS | 25 MSPS | 20 MSPS (clamped) | 2.44 / 1.95 |
+
+Clamping below Nyquist logs a `log::warn!` rather than failing — an aliased B1C signal is still the best a HackRF can do. Sinks with no hardware in the path get the full 25 MSPS, so B1C IQ recordings are usable by an external receiver.
 
 The rate flows from `effective_sample_rate()` → each `run_*` backend → `generate_iq(sample_rate)`, which computes `dt = 1/rate` and `samples_per_step = STEP_SECS * rate` at runtime. The HackRF hardware is configured at the same rate to keep TX and IQ generation in sync.
 
@@ -99,7 +115,29 @@ The rate flows from `effective_sample_rate()` → each `run_*` backend → `gene
 
 *Channel initialisation* (`channel.rs`): `Channel::new()` sets the initial Doppler from the pseudorange rate: `f_carr = -rho.rate / LAMBDA_L1`, `f_code = chip_rate + f_carr / CARR_TO_CODE`. This ensures the first 100 ms step already has the correct frequency offset, not zero.
 
-*Known hard limit*: BeiDou B1C (10.23 Mcps) is slightly below Nyquist at 20 MSPS (1.95 samples/chip). Correct representation would need >20.46 MSPS, which exceeds HackRF hardware. GPS and Galileo are above Nyquist at their respective auto rates.
+**Navigation message (`navmsg.rs` + `channel.rs`) — the data layer:**
+
+A receiver can acquire and track a perfectly-formed signal and still never report a position. Everything that decides *position* lives in the 50 bps data layer, and none of it is visible to a spectrum plot or an acquisition search. Three invariants must hold:
+
+1. **Parity (IS-GPS-200 Table 20-XIV).** Each of the six parity bits XORs in one of the previous word's two carry bits: D25/D27/D30 chain from D29\*, and D26/D28/D29 chain from D30\*. Parity is computed over the *uncomplemented* data, while the transmitted data bits are complemented when D30\* is set. Dropping the carry term leaves parity correct only when both carry bits are zero — about one word in four — and every subframe is then discarded by the receiver.
+2. **Words 2 and 10** of every subframe carry two non-information-bearing bits (23 and 24), solved so the resulting D29 and D30 are zero. That is the `nib` flag on `compute_checksum`.
+3. **Frame timing.** A frame is exactly 50 words = 30 s at 50 bps, aligned to a 30-second GPS epoch (`frame_start`). Each subframe's HOW carries the TOW of the **next** subframe boundary. `Channel::init_code_phase` positions the bit counters from the signal's *transmit* time (`grx - range/c`), not from `grx`, because that is the reference the receiver reconstructs from the TOW.
+
+The frame buffer is sized to exactly one frame so the word counter wraps precisely on the frame boundary — a buffer longer than a frame transmits dead words. `Channel::prepare_next_frame()` builds the following frame once the channel reaches word 40, and `advance_nav_bit()` swaps it in at the wrap, carrying `last_word` across so parity chains unbroken. Both are driven by the channel's own word counter rather than the step index, so frames stay aligned with that satellite's Doppler-shifted bit stream.
+
+*Known hard limit*: BeiDou B1C (10.23 Mcps) needs >20.46 MSPS, which exceeds the HackRF's 20 MSPS maximum — over-the-air B1C is aliased at 1.95 samples/chip and the simulator warns about it. This is a hardware ceiling only: file/UDP/TCP sinks generate B1C at 25 MSPS, above Nyquist. GPS and Galileo clear Nyquist on every sink.
+
+**Signal-chain tests:**
+
+`tests/signal_chain.rs` runs the whole pipeline (synthetic RINEX → IQ file) and asserts on the generated baseband — main lobe vs sidelobes, C/A nulls at ±1.023 MHz, sc8 amplitude range, I/Q balance, and DC concentration. It is the Rust counterpart of `gnuradio/plot_iq_file.py` and guards the fixed bugs listed below.
+
+The RINEX fixture is generated in-test (`synth_rinex()`), so no nav file is needed on disk. Spectral bands deliberately **exclude DC**: an unmodulated carrier puts all its power in the DC bin and would otherwise pass a naive main-lobe check.
+
+When changing the signal chain, verify a test still fails with the bug reintroduced — several of these checks are only load-bearing because their bands are chosen carefully.
+
+**Navigation-message tests** live in `channel.rs` and decode the bit stream the way a receiver does: pull bits via `advance_nav_bit()`, check parity on every word, locate the preamble, and compare the decoded TOW against where the bits actually sit in time.
+
+These tests anchor their expectations to `grx` and the pseudorange — **never to the channel's own `g0` or word counters**. A test that reads its expectation out of the state it is checking will agree with a uniformly-shifted timeline, which is exactly the bug class that lets a receiver track happily and never fix. If you add tests here, derive ground truth independently.
 
 **UI rendering pattern:**
 
@@ -110,7 +148,9 @@ The rate flows from `effective_sample_rate()` → each `run_*` backend → `gene
 
 Because egui closures hold borrows, mutations triggered by button clicks are **deferred**: page functions return an actions struct (`RouteLibraryActions`, `WaypointPageActions`, `RoutePageActions`) applied after the closure completes.
 
-**UI helpers in `ui.rs`:**
+Page functions live in one module per page and are `pub(crate)`; the actions structs' fields are `pub(crate)` too, because `ui::chrome::show_central_panel` applies them after the page closure returns.
+
+**UI helpers in `ui/widgets.rs`:**
 - `page_heading(ui, title)` — renders a large heading + separator used at the top of every page
 - `section_title(ui, text)` — bold 13 px label used for group headers within a page
 - `nav_image_active_with_tooltip(ui, src, active, tooltip)` — nav button with blue left accent when active
@@ -131,7 +171,7 @@ Because egui closures hold borrows, mutations triggered by button clicks are **d
 - Waypoints persist in `./waypoint/`; UMF motion files in `./umf/`; downloaded RINEX nav files in `./Rinex_files/`.
 - Route library index is `./umf/library.json` (array of `RouteEntry` with `name`, `distance_m`, `duration_s`, `velocity_kmh`).
 
-**Image assets** in `assets/img/` are embedded at compile time via `egui::include_image!()`. All image macros live in `src/ui.rs`, so paths use `../assets/img/`.
+**Image assets** in `assets/img/` are embedded at compile time via `egui::include_image!()`. All image macros live in `src/ui/chrome.rs`, so paths use `../../assets/img/`. Adding an `include_image!` elsewhere in `src/ui/` needs the same two-level prefix — the macro resolves relative to its own source file.
 
 ## Linting rules
 
