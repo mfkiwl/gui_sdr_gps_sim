@@ -1,6 +1,6 @@
 # GPS Signal Simulation — Test Report
 
-**Date:** 2026-06-01  
+**Date:** 2026-06-01 (Test 3 and conclusions revised 2026-08-04)  
 **Firmware:** HackRF One `local-79baef7` (API 1.03)  
 **Software:** `gui_sdr_gps_sim` v0.1.0, Rust 1.88, GPS L1 C/A 1575.42 MHz
 
@@ -81,64 +81,142 @@ RX: hackrf_transfer -d 708061dc214a394b -r rx_capture.iq -f 1575420000
 
 ## Test 3 — GPS Signal Acquisition (PCPS)
 
-The captured RX file was processed with a parallel code phase search (PCPS)
-acquisition engine to detect GPS satellite signals.
+> **This test was rewritten on 2026-08-04.** The original version reported
+> *25 / 32 satellites acquired*. That result was invalid — see
+> [Why the original Test 3 was wrong](#why-the-original-test-3-was-wrong) at the
+> end of this section. The numbers below were re-measured with a corrected tool
+> and are scored against a known answer.
 
-**Tool:** `gnuradio/gps_acquisition.py`  
-**Parameters:** Doppler search ±10 kHz in 500 Hz steps, threshold peak/noise > 2.5,
-20× non-coherent integration (20 code periods = 20 ms).
+**Tool:** `gnuradio/gps_acquisition.py`
+**Method:** parallel code phase search, 1 ms coherent correlation with 20×
+non-coherent power accumulation (20 ms total).
+**Detection statistic:** peak-to-second-peak on the power surface, excluding a
+±1 chip guard band around the main peak. This metric sits near 1.0 for noise
+regardless of search size, so a fixed threshold of 2.5 is meaningful.
+
+### Test 3a — Acquisition on the generated baseband
+
+Run against the simulator's own output, where the answer is known in advance.
+`examples/gen_iq_labeled.rs` writes the IQ file *and* prints the exact set of
+satellites it put in it, so the search can be scored for both misses and false
+positives.
 
 ```
-python gnuradio/gps_acquisition.py --file rx_capture.iq \
-       --samp-rate 3000000 --save-plot gnuradio/acquisition_result.png
+cargo run --release --example gen_iq_labeled
+python gnuradio/gps_acquisition.py --file gnuradio/gps_signal_fixed.iq \
+       --samp-rate 3000000 --save-plot gnuradio/acq_fixed.png
 ```
 
-![Acquisition results](gnuradio/acquisition_result.png)
+**Ground truth — 14 satellites transmitted:**
+PRN 1, 2, 10, 12, 13, 14, 17, 19, 20, 22, 23, 24, 25, 32
 
-### Per-PRN Acquisition Results
+![Acquisition results](gnuradio/acq_fixed.png)
 
-| PRN | Status | Peak/Noise | Doppler (Hz) | Code Phase |
-|-----|--------|-----------|-------------|-----------|
-| 1   | **ACQ** | 2.59 | +9500 | 1210 |
-| 2   | **ACQ** | 3.03 | +2500 | 149 |
-| 3   | **ACQ** | 2.52 | +1500 | 1529 |
-| 4   | **ACQ** | 2.98 | −6500 | 1289 |
-| 5   | **ACQ** | 3.06 | 0 | 336 |
-| 6   | **ACQ** | 3.17 | −8500 | 2194 |
-| 7   | **ACQ** | 2.80 | −500 | 19 |
-| 8   | **ACQ** | 3.09 | +1500 | 1282 |
-| 9   | — | 2.44 | −8500 | 613 |
-| 10  | **ACQ** | 2.68 | +2500 | 1270 |
-| 11  | **ACQ** | 2.94 | −6500 | 1772 |
-| 12  | — | 2.38 | +6500 | 2357 |
-| 13  | **ACQ** | 2.52 | −5500 | 2343 |
-| 14  | — | 2.38 | +3500 | 534 |
-| 15  | **ACQ** | 2.90 | −9500 | 486 |
-| 16  | **ACQ** | 2.83 | −4500 | 888 |
-| 17  | **ACQ** | 2.63 | −7500 | 2533 |
-| 18  | **ACQ** | 2.60 | −4500 | 789 |
-| 19  | **ACQ** | 2.71 | +1500 | 117 |
-| 20  | **ACQ** | 2.94 | +7500 | 2157 |
-| 21  | **ACQ** | 2.90 | 0 | 2583 |
-| 22  | **ACQ** | 2.95 | −10000 | 1993 |
-| 23  | — | 2.32 | +2500 | 599 |
-| 24  | — | 2.38 | −9500 | 2343 |
-| 25  | — | 2.40 | +8500 | 1993 |
-| 26  | **ACQ** | 3.15 | −9500 | 2249 |
-| 27  | **ACQ** | 2.77 | −500 | 2471 |
-| 28  | **ACQ** | 2.51 | +9500 | 333 |
-| 29  | — | 2.32 | −9500 | 2066 |
-| 30  | **ACQ** | 2.67 | −2500 | 1625 |
-| 31  | **ACQ** | 3.44 | +1500 | 2594 |
-| 32  | **ACQ** | 3.21 | −500 | 422 |
+| PRN | Elevation | pk/2nd | SNR (dB) | Doppler (Hz) | Code phase | Status |
+|-----|-----------|--------|----------|--------------|------------|--------|
+| 24  | 87.3° | 81.09 | 24.5 | 0     | 2990 | **ACQ** |
+| 12  | 41.0° | 42.62 | 21.7 | +3000 | 1519 | **ACQ** |
+| 13  | 42.5° | 34.88 | 21.3 | +3000 | 1466 | **ACQ** |
+| 19  | 38.7° | 25.57 | 19.2 | +1500 | 2125 | **ACQ** |
+| 17  | 30.5° | 25.27 | 19.3 | −1500 | 2609 | **ACQ** |
+| 20  | 21.4° | 20.99 | 17.8 | −3500 | 854  | **ACQ** |
+| 23  | 22.5° | 20.50 | 18.2 | −2500 | 565  | **ACQ** |
+| 10  | 25.7° | 19.65 | 18.4 | 0     | 619  | **ACQ** |
+| 22  | 23.4° | 14.11 | 17.0 | −3500 | 191  | **ACQ** |
+| 32  | 6.7°  | 10.31 | 15.0 | +3500 | 1285 | **ACQ** |
+| 14  | 7.6°  | 9.57  | 16.0 | −3500 | 944  | **ACQ** |
+| 25  | 6.0°  | 7.79  | 15.3 | +4000 | 98   | **ACQ** |
+| 1   | 4.3°  | 6.36  | 13.4 | 0     | 499  | **ACQ** |
+| 2   | 0.1°  | 5.53  | 13.6 | −1500 | 827  | **ACQ** |
+| *18 others* | not transmitted | 1.01–1.66 | ~6 | — | — | — |
 
-**Summary: 25 / 32 satellites acquired** (78%). The 7 non-acquired PRNs all scored
-between 2.32–2.44, just below the 2.5 threshold; they likely represent
-satellites not in the simulated sky view for Amsterdam at this RINEX epoch, or
-borderline noise — not false negatives.
+**Result: 14 / 14 acquired, 0 misses, 0 false positives.** Median pk/2nd across
+all 32 PRNs is 1.50 — the noise baseline. The weakest true detection (5.53) sits
+3.3× above the strongest noise score (1.66), so the threshold has ample margin.
 
-A real GPS receiver needs only **4 satellites** to compute a position fix. With
-25 acquired here there is ample geometry for a position solution.
+Two independent confirmations that the signal chain is correct:
+
+1. **The acquired set matches the transmitted set exactly.** Not a count — the
+   identical set of PRN numbers.
+2. **Peak strength orders by elevation**, from PRN 24 near zenith (81.09) down
+   to PRN 2 on the horizon (5.53). That is the osqzss antenna pattern in
+   `signal.rs` behaving as designed; nothing in the acquisition search knows
+   about elevation.
+
+Re-running the same search against the pre-fix `gps_signal.iq` from 2026-06-01
+gives the same PRN set and the same ratios to two decimal places. That is expected: only one navigation bit is
+transmitted in 20 ms, so the navigation-message fixes of 2026-08-04 change
+nothing about acquisition. **Acquisition never depended on the nav data — which
+is exactly why the receiver-lock failure hid behind a passing signal test.**
+
+### Test 3b — Acquisition on the over-the-air capture
+
+The same search applied to `rx_capture.iq` (the HackRF-to-HackRF capture from
+Test 2) initially found **nothing** — 0 / 32, median pk/2nd 1.05.
+
+The cause is not the signal but the search window. The two HackRFs run from
+independent uncalibrated crystals; their difference appears as a fixed frequency
+offset on top of the satellite Doppler. Widening the search reveals it:
+
+```
+python gnuradio/gps_acquisition.py --file rx_capture.iq --samp-rate 3000000 \
+       --doppler-range 40000 --doppler-step 500
+```
+
+| PRN | pk/2nd | SNR (dB) | Doppler (Hz) | Code phase | Status |
+|-----|--------|----------|--------------|------------|--------|
+| 24  | 10.98 | 12.3 | **+22 000** | 211  | **ACQ** |
+| 13  | 3.22  | 8.2  | **+24 500** | 1669 | **ACQ** |
+| *30 others* | 1.00–1.25 | 7–10 | — | — | — |
+
+**Result: 2 / 32 acquired.** The +22 kHz common offset is 14 ppm at 1575.42 MHz,
+well within the HackRF's ±20 ppm crystal specification. The ~2.5 kHz spread
+between PRN 24 and PRN 13 is genuine satellite Doppler.
+
+Two conclusions follow:
+
+- **The RF link works.** The signal is present over the air and correlates
+  cleanly once the search looks in the right place.
+- **The link costs roughly 10–15 dB.** PRN 24 drops from 81.09 on the baseband
+  to 10.98 over the air, and only the two strongest satellites clear threshold
+  where 14 do in the file. That is consistent with the Test 2 observation that
+  20 dB TX VGA was marginal. For receiver testing, use a direct cable with
+  attenuation rather than an antenna path, and expect to raise TX gain.
+
+> **Practical note:** any acquisition search on a two-radio setup must span at
+> least ±30 kHz, or budget for calibrating the offset out first. A ±10 kHz
+> window cannot see a 14 ppm clock difference.
+
+### Why the original Test 3 was wrong
+
+The original run reported 25 / 32 acquired with every PRN scoring between 2.32
+and 3.44. That uniformity was the tell: **no more than about 12 GPS satellites
+are ever above the horizon at once**, and the simulator only allocates channels
+for visible ones, so 25 detections was not physically possible. The tool had
+three independent defects:
+
+| # | Defect | Effect |
+|---|--------|--------|
+| 1 | `_ca_code_clean` rolled the G2 register the wrong way — `G1[i] ^ G2[(i + shift)]` instead of the IS-GPS-200 delay form `G1[i] ^ G2[(i − delay)]` | Correlated against 32 valid Gold codes belonging to **no satellite**. PRN 1 began `0000011010`; IS-GPS-200 Table 3-Ia specifies `1100100000` (octal 1440). |
+| 2 | `pcps_acquire` opened with `seg = signal[:spc]`, discarding 19 of the 20 ms it was given | The advertised 20× non-coherent integration never happened, costing ~13 dB of sensitivity. |
+| 3 | Detection used peak-over-mean, whose expected value on a 41 × 3000 noise surface is ≈ 4 by extreme-value statistics, against a threshold of 2.5 | The threshold sat **below the noise floor**, so every PRN "acquired" by construction. |
+
+Defect 1 also explains the one apparently-strong detection in the original data.
+The wrong-direction roll makes the tool's PRN *k* equal the true PRN whose delay
+is `1023 − shift(k)`. There are exactly two such collisions in the PRN 1–32
+table:
+
+```
+tool PRN 23  ==  true PRN 26
+tool PRN 26  ==  true PRN 23     (1023 − 514 = 509)
+```
+
+True PRN 23 was transmitted and true PRN 26 was not — so the tool's "PRN 26" was
+the only entry that ever rose above noise, while its "PRN 23" stayed flat. Every
+observation in the original table is accounted for by these three defects.
+
+The simulator's own `codegen.rs` was never at fault: its `prn1_first_chips` test
+asserts the correct IS-GPS-200 sequence and passes.
 
 ---
 
@@ -220,25 +298,54 @@ With ≥ 4 satellites decoded:
 |---|---|
 | TX signal quality (IQ file) | All 4 checks PASS — signal is correctly formed |
 | Over-the-air capture | Signal visible at −29.9 dBfs, spectral shape correct |
-| GPS acquisition (PCPS) | **25 / 32 PRNs acquired** — more than sufficient for a fix |
+| GPS acquisition — baseband (Test 3a) | **14 / 14 transmitted PRNs acquired**, 0 false positives |
+| GPS acquisition — over the air (Test 3b) | **2 / 32**, at a +22 kHz TX/RX crystal offset |
 | Minimum requirement for fix | 4 satellites |
 | GPS time continuity (static loop) | Fixed in this release: GPS time no longer resets each loop pass |
 | Recommended TX VGA gain | 35 dB (default 20 dB was marginal; 35 dB gives reliable acquisition) |
 
 ### What this means for GPS receiver lock
 
-A hardware GPS receiver connected to the RX HackRF antenna would receive the
-same signal captured in this test. With 25 satellites above the acquisition
-threshold and coherent Doppler/code-phase estimates available, any GPS receiver
-that performs standard C/A acquisition should be able to:
+Test 3a establishes that the transmitted baseband is correct at the signal
+level: every simulated satellite is acquirable, at strengths ordered by
+elevation. Test 3b establishes that the signal survives the air path, at a cost
+of roughly 10–15 dB.
+
+**Acquisition alone does not imply lock.** Acquisition and tracking are
+insensitive to the contents of the 50 bps navigation message; a receiver can
+correlate and track a signal indefinitely and still never report a position if
+the data layer is malformed. That is precisely what happened here, and it is why
+the original version of this report concluded the simulator was working when no
+receiver would fix on it.
+
+Three navigation-message defects were found and fixed on 2026-08-04:
+
+| Defect | Effect |
+|---|---|
+| Parity omitted the D29\*/D30\* carry term (IS-GPS-200 Table 20-XIV) | ~74% of words failed parity — no subframe ever validated, so ephemeris never decoded |
+| 60-word frame buffer with only 50 words written | 6 s of zero bits every 36 s, destroying subframe sync |
+| Bit stream offset 6 s from the TOW it advertised, with no 30 s frame alignment | Receiver places every satellite ~23 km along its orbit; residuals never converge |
+
+These are covered by regression tests in `src/gps_sim/channel.rs` and
+`src/gps_sim/navmsg.rs`, which decode the transmitted bit stream the way a
+receiver does — parity on every word, preamble cadence, and decoded TOW checked
+against transmit time derived independently from `grx` and the pseudorange.
+
+With those corrected, a receiver performing standard C/A acquisition should be
+able to:
 
 1. **Acquire** multiple satellites within 1–30 s cold-start time
 2. **Track** and decode navigation messages (subframes 1–3 within ~30 s)
 3. **Compute a position fix** once 4+ sets of ephemeris + TOW are decoded
 
+Step 3 has not yet been confirmed against real hardware; that is the outstanding
+item. When testing against a phone, note that phones fuse GNSS with WiFi and
+cell positioning and use A-GPS assistance, so a plausible-looking position is
+not evidence of a GPS lock. Prefer a bare receiver where C/N0 and subframe
+decode can be observed directly.
+
 The GPS time continuity fix (commit on `main`) ensures the static loop no
-longer resets GPS time between passes, which was the primary reason receivers
-could not maintain lock beyond the first 5-minute pass.
+longer resets GPS time between passes.
 
 ---
 
@@ -246,21 +353,39 @@ could not maintain lock beyond the first 5-minute pass.
 
 | File | Purpose |
 |---|---|
-| `gps_signal.iq` | Simulated GPS baseband (5 s, sc8, 3 MSPS) |
+| `gps_signal.iq` | Simulated GPS baseband (5 s, sc8, 3 MSPS) — 2026-06-01 |
+| `gnuradio/gps_signal_fixed.iq` | Simulated GPS baseband (20 s) — Test 3a, 2026-08-04 |
 | `rx_capture.iq` | Over-the-air capture from HackRF 1 (10 s) |
 | `gnuradio/tx_signal_analysis.png` | 4-panel analysis of transmit IQ file |
 | `gnuradio/rx_capture_analysis.png` | 4-panel analysis of received IQ file |
-| `gnuradio/acquisition_result.png` | PCPS acquisition results, all 32 PRNs |
+| `gnuradio/acq_fixed.png` | Test 3a acquisition results, all 32 PRNs |
+| `gnuradio/acq_rx_corrected.png` | Test 3b acquisition results, over the air |
+| `gnuradio/acquisition_result.png` | *Superseded* — plot from the retracted Test 3 |
 | `gnuradio/gps_gnuradio_flowchart.png` | GNU Radio GPS decoder block diagram |
-| `gnuradio/gps_acquisition.py` | Pure-NumPy PCPS acquisition engine |
+| `gnuradio/gps_acquisition.py` | Pure-NumPy PCPS acquisition engine (corrected 2026-08-04) |
 | `gnuradio/gps_gnuradio_flowchart.py` | Flowchart diagram generator |
 | `gnuradio/gps_l1_analyzer.py` | Live HackRF spectrum analyser (GNU Radio) |
+| `examples/gen_iq_labeled.rs` | Generates IQ **and** prints the ground-truth PRN list |
+| `src/gps_sim/navmsg.rs` | Parity, frame layout, and TOW fixes (2026-08-04) |
+| `src/gps_sim/channel.rs` | Transmit-time bit alignment; nav bit-stream decode tests |
 | `src/simulator/worker.rs` | GPS time continuity fix for static loop |
 | `src/gps_sim/sim.rs` | `SimEvent::SimStart` added for pass-to-pass GPS time handoff |
 
 ```
 HackRF firmware:  local-79baef7  (API 1.03)
 Python:           3.14.2
-NumPy:            (system)
+NumPy:            2.4.1
+Matplotlib:       3.10.9
 Rust toolchain:   1.88
+```
+
+### Reproducing Test 3
+
+```bash
+# 3a — baseband, scored against ground truth
+cargo run --release --example gen_iq_labeled
+python gnuradio/gps_acquisition.py --file gnuradio/gps_signal_fixed.iq        --samp-rate 3000000 --save-plot gnuradio/acq_fixed.png
+
+# 3b — over the air; the wide window is required for the TX/RX clock offset
+python gnuradio/gps_acquisition.py --file rx_capture.iq --samp-rate 3000000        --doppler-range 40000 --doppler-step 500        --save-plot gnuradio/acq_rx_corrected.png
 ```
