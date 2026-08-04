@@ -100,3 +100,20 @@ pub enum SdrOutput {
     /// and `nc -l <port> | hackrf_transfer -t /dev/stdin`.
     TcpServer { port: u16 },
 }
+
+impl SdrOutput {
+    /// Highest IQ sample rate this sink can accept, or `None` if unconstrained.
+    ///
+    /// Only physical SDRs impose a ceiling.  File, network, and null sinks are
+    /// limited by nothing but CPU, so `BeiDou` B1C can be generated above its
+    /// 20.46 MSPS Nyquist rate when the target is one of those.
+    pub fn max_sample_rate(&self) -> Option<f64> {
+        match self {
+            Self::HackRf { .. } => Some(types::consts::HACKRF_MAX_SAMPLE_RATE),
+            Self::PlutoSdr { .. } => Some(types::consts::PLUTO_MAX_SAMPLE_RATE),
+            Self::IqFile { .. } | Self::Null | Self::UdpStream { .. } | Self::TcpServer { .. } => {
+                None
+            }
+        }
+    }
+}

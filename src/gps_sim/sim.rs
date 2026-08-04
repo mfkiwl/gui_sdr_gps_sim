@@ -25,12 +25,11 @@ use std::time::{Duration, Instant};
 use super::channel::Channel;
 use super::coords::llh_to_ecef;
 use super::fifo::IqFifo;
-use super::navmsg::generate_nav_msg;
 use super::rinex::NavData;
 use super::signal::{COS_TABLE, SIN_TABLE, ant_pattern_linear};
 use super::types::{
     Constellation, GpsTime, Location, StartTime,
-    consts::{CARR_TO_CODE, HACKRF_BUF_BYTES, LAMBDA_L1, MAX_CHANNELS, SAMPLE_RATE, STEP_SECS},
+    consts::{CARR_TO_CODE, HACKRF_BUF_BYTES, LAMBDA_L1, MAX_CHANNELS, STEP_SECS},
 };
 use super::{SdrOutput, SimError};
 
@@ -572,6 +571,50 @@ pub struct Simulator {
     use_galileo: bool,
 }
 
+/// Choose the IQ sample rate for a given constellation and output sink.
+///
+/// | Constellation | Chip rate | Nyquist | Preferred | On `HackRF`/Pluto |
+/// |---|---|---|---|---|
+/// | GPS L1 C/A | 1.023 Mcps | 2.05 MSPS | **3 MSPS** (2.93 samps/chip) | 3 MSPS |
+/// | Galileo E1-B | 4.092 Mcps | 8.18 MSPS | **10 MSPS** (2.44 samps/chip) | 10 MSPS |
+/// | `BeiDou` B1C | 10.23 Mcps | 20.46 MSPS | **25 MSPS** (2.44 samps/chip) | 20 MSPS (clamped) |
+///
+/// `widest` must be the highest-chip-rate constellation that is enabled, since
+/// all active constellations share one output buffer.
+///
+/// The preferred rate is clamped to [`SdrOutput::max_sample_rate`] when the sink
+/// is a physical SDR.  File, UDP, TCP, and null sinks have no ceiling, so B1C is
+/// generated above Nyquist there rather than aliased — that is what makes an IQ
+/// recording usable by an external receiver.  Clamping below Nyquist is logged
+/// as a warning rather than rejected, because a slightly-aliased B1C signal on a
+/// `HackRF` is still the best that hardware can do.
+///
+/// `override_hz` (from [`SimulatorBuilder::hackrf_sample_rate`]) always wins.
+fn select_sample_rate(override_hz: Option<f64>, widest: Constellation, output: &SdrOutput) -> f64 {
+    if let Some(rate) = override_hz {
+        return rate;
+    }
+
+    let preferred = widest.preferred_sample_rate();
+    let rate = match output.max_sample_rate() {
+        Some(max) if preferred > max => max,
+        _ => preferred,
+    };
+
+    if rate < widest.nyquist_rate() {
+        log::warn!(
+            "{widest:?} needs {:.2} MSPS to satisfy Nyquist but this output caps at {:.2} MSPS \
+             ({:.2} samples/chip). The main lobe will alias and receiver correlation will be \
+             degraded — use an IQ file, UDP, or TCP sink for a full-rate recording.",
+            widest.nyquist_rate() / 1e6,
+            rate / 1e6,
+            rate / widest.chip_rate(),
+        );
+    }
+
+    rate
+}
+
 impl Simulator {
     /// Return a builder with all settings at their defaults.
     pub fn builder() -> SimulatorBuilder {
@@ -594,26 +637,29 @@ impl Simulator {
         self.stop.clone()
     }
 
-    /// Select the IQ sample rate appropriate for the active constellations.
+    /// The widest-bandwidth constellation currently enabled.
     ///
-    /// | Constellation | Chip rate | Min rate | Auto-selected |
-    /// |---|---|---|---|
-    /// | GPS L1 C/A | 1.023 Mcps | 2.05 MSPS | **3 MSPS** |
-    /// | Galileo E1-B | 4.092 Mcps | 8.18 MSPS | **10 MSPS** (2.44 samps/chip) |
-    /// | `BeiDou` B1C | 10.23 Mcps | 20.46 MSPS | **20 MSPS** (`HackRF` max, 1.95 samps/chip) |
-    ///
-    /// A manually-set [`SimulatorBuilder::hackrf_sample_rate`] always takes precedence.
-    fn effective_sample_rate(&self) -> f64 {
-        if let Some(rate) = self.hackrf_sample_rate {
-            return rate;
-        }
+    /// The output buffer is shared by all active constellations, so the sample
+    /// rate has to satisfy the most demanding one.
+    fn widest_constellation(&self) -> Constellation {
         if self.use_beidou {
-            20_000_000.0 // BeiDou B1C needs ~20.46 MSPS; 20 MSPS is the HackRF maximum
+            Constellation::BeiDou
         } else if self.use_galileo {
-            10_000_000.0 // Galileo E1-B needs ~8.18 MSPS; 10 MSPS gives 2.44 samples/chip
+            Constellation::Galileo
         } else {
-            SAMPLE_RATE // GPS L1 C/A: 3 MSPS gives 2.93 samples/chip
+            Constellation::Gps
         }
+    }
+
+    /// Select the IQ sample rate for the active constellations and sink.
+    ///
+    /// See [`select_sample_rate`] for the selection rules.
+    fn effective_sample_rate(&self) -> f64 {
+        select_sample_rate(
+            self.hackrf_sample_rate,
+            self.widest_constellation(),
+            &self.output,
+        )
     }
 
     /// Run the simulation on a background OS thread and return a [`SimulatorHandle`].
@@ -1492,13 +1538,7 @@ fn generate_iq(
                     if ch.icode >= 20 {
                         // Start of a new navigation bit.
                         ch.icode = 0;
-                        ch.ibit += 1;
-                        if ch.ibit >= 30 {
-                            // Start of a new navigation word.
-                            ch.ibit = 0;
-                            ch.iword = (ch.iword + 1) % 60;
-                        }
-                        ch.data_bit = ((ch.dwrd[ch.iword] >> (29 - ch.ibit)) & 1) as i32 * 2 - 1;
+                        ch.advance_nav_bit();
                     }
                 }
                 // Update the spreading chip from the continuous code-phase accumulator
@@ -1567,13 +1607,14 @@ fn generate_iq(
             }
         }
 
-        // ── Regenerate navigation message every 30 s ──────────────────────────
-        // One navigation message cycle = 300 steps × 0.1 s = 30 s.
-        if step % 300 == 299 {
-            for ch in &mut channels {
-                ch.ipage = (ch.ipage + 1) % 25;
-                ch.dwrd = generate_nav_msg(&ch.sbf, grx, ch.ipage);
-            }
+        // ── Prepare the next navigation frame ─────────────────────────────────
+        // Built once per frame, as soon as the channel enters its final subframe
+        // (word 40 of 50 — six seconds of lead time).  Each channel is driven by
+        // its own word counter rather than by the step index, so the frames stay
+        // aligned with that satellite's Doppler-shifted bit stream instead of
+        // drifting against a wall-clock schedule.
+        for ch in &mut channels {
+            ch.prepare_next_frame();
         }
 
         // ── Progress event (every step) ───────────────────────────────────────
@@ -1775,4 +1816,103 @@ fn best_eph_set(nav: &NavData, g0: GpsTime) -> usize {
         })
         .map(|(i, _)| i)
         .unwrap_or(0)
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::{Constellation, SdrOutput, select_sample_rate};
+
+    /// Sinks with no hardware ceiling must get the constellation's preferred rate.
+    #[test]
+    fn unconstrained_sinks_use_preferred_rate() {
+        for output in [
+            SdrOutput::Null,
+            SdrOutput::IqFile {
+                path: "x.iq".into(),
+            },
+            SdrOutput::UdpStream {
+                addr: "127.0.0.1:1234".into(),
+            },
+            SdrOutput::TcpServer { port: 1234 },
+        ] {
+            for c in [
+                Constellation::Gps,
+                Constellation::Galileo,
+                Constellation::BeiDou,
+            ] {
+                assert_eq!(
+                    select_sample_rate(None, c, &output),
+                    c.preferred_sample_rate(),
+                    "{c:?} on {output:?} should use its preferred rate",
+                );
+            }
+        }
+    }
+
+    /// A file sink must not be capped at the `HackRF`'s 20 MSPS — generating B1C
+    /// above Nyquist is only possible when no hardware is in the path.
+    #[test]
+    fn beidou_to_file_exceeds_nyquist() {
+        let out = SdrOutput::IqFile {
+            path: "x.iq".into(),
+        };
+        let rate = select_sample_rate(None, Constellation::BeiDou, &out);
+        assert!(
+            rate > Constellation::BeiDou.nyquist_rate(),
+            "B1C to file was {rate} Hz, must exceed {} Hz",
+            Constellation::BeiDou.nyquist_rate(),
+        );
+    }
+
+    /// The `HackRF` ceiling still applies, and B1C is the one signal it clips.
+    #[test]
+    fn hackrf_clamps_beidou_only() {
+        let hackrf = SdrOutput::HackRf {
+            gain_db: 20,
+            amp: false,
+        };
+        assert_eq!(
+            select_sample_rate(None, Constellation::BeiDou, &hackrf),
+            super::super::types::consts::HACKRF_MAX_SAMPLE_RATE,
+        );
+        // GPS and Galileo are already under the ceiling and must pass through.
+        for c in [Constellation::Gps, Constellation::Galileo] {
+            assert_eq!(
+                select_sample_rate(None, c, &hackrf),
+                c.preferred_sample_rate(),
+            );
+        }
+    }
+
+    /// An explicit builder override wins over both preference and hardware cap.
+    #[test]
+    fn explicit_override_wins() {
+        let hackrf = SdrOutput::HackRf {
+            gain_db: 20,
+            amp: false,
+        };
+        assert_eq!(
+            select_sample_rate(Some(2_600_000.0), Constellation::BeiDou, &hackrf),
+            2_600_000.0,
+        );
+    }
+
+    /// Every preferred rate except the HackRF-clamped B1C case must clear Nyquist.
+    #[test]
+    fn preferred_rates_clear_nyquist() {
+        for c in [
+            Constellation::Gps,
+            Constellation::Galileo,
+            Constellation::BeiDou,
+        ] {
+            assert!(
+                c.preferred_sample_rate() > c.nyquist_rate(),
+                "{c:?} preferred rate {} is below Nyquist {}",
+                c.preferred_sample_rate(),
+                c.nyquist_rate(),
+            );
+        }
+    }
 }

@@ -47,7 +47,7 @@ pub const EMPTY_WORD: u32 = 0xAAAA_AAAA;
 ///
 /// Each mask selects which data bits contribute to one parity bit via
 /// even-parity XOR.
-const PARITY_MASKS: [u32; 6] = [
+pub(crate) const PARITY_MASKS: [u32; 6] = [
     0x3B1F_3480, // D25
     0x1D8F_9A40, // D26
     0x2EC7_CD00, // D27
@@ -58,30 +58,55 @@ const PARITY_MASKS: [u32; 6] = [
 
 // ── Parity ────────────────────────────────────────────────────────────────────
 
-/// Apply IS-GPS-200 parity to a 30-bit navigation word.
+/// Apply IS-GPS-200 Table 20-XIV parity to a 30-bit navigation word.
 ///
-/// `source` must already have D29\* in bit 31 and D30\* in bit 30.
-/// If D30\* is set, data bits 29–6 are complemented before the parity
-/// computation (IS-GPS-200 §20.3.5).
+/// `source` must have D29\* in bit 31 and D30\* in bit 30 — the two parity bits
+/// of the previously transmitted word — and the 24 data bits in 29–6.
+///
+/// Two rules from the standard, both of which a receiver checks on every word:
+///
+/// 1. If D30\* is set, the 24 data bits are transmitted complemented (§20.3.5).
+/// 2. **Each parity bit XORs in one of the carry bits**: D25, D27 and D30 chain
+///    from D29\*, while D26, D28 and D29 chain from D30\*. Parity is computed
+///    over the *uncomplemented* data.
+///
+/// Omitting rule 2 leaves the parity correct only when both carry bits happen to
+/// be zero — about one word in four — which no receiver will accept.
+///
+/// `nib` selects the handling for words 2 and 10 of every subframe, whose bits
+/// 23 and 24 are non-information-bearing: they are solved so that the resulting
+/// D29 and D30 are zero, as the standard requires.
 ///
 /// # Returns
-/// The 30-bit word with 6 parity bits appended in bits 5–0.
-pub fn compute_checksum(source: u32, d30_star: bool) -> u32 {
-    // Complement data bits if D30* is set.
-    let d = if d30_star {
-        source ^ 0x3FFF_FFC0
-    } else {
-        source
-    };
+/// The 30-bit word with 6 parity bits in bits 5–0.
+pub fn compute_checksum(source: u32, nib: bool) -> u32 {
+    // Data bits only — the carry bits must not leak into the parity sums.
+    let mut d = source & 0x3FFF_FFC0;
+    let d29_star = (source >> 31) & 1;
+    let d30_star = (source >> 30) & 1;
 
-    // Compute each parity bit as even-parity over the selected data bits.
-    let parity: u32 = PARITY_MASKS
-        .iter()
-        .enumerate()
-        .map(|(bit, &mask)| ((d & mask).count_ones() % 2) << (5 - bit as u32))
-        .sum();
+    if nib {
+        // Solve bits 23 and 24 so that D29 and D30 come out zero.
+        if (d30_star + (PARITY_MASKS[4] & d).count_ones()) % 2 != 0 {
+            d ^= 1 << 6;
+        }
+        if (d29_star + (PARITY_MASKS[5] & d).count_ones()) % 2 != 0 {
+            d ^= 1 << 7;
+        }
+    }
 
-    (d & 0xFFFF_FFC0) | parity
+    // Transmitted data bits: complemented when D30* is set.
+    let mut word = if d30_star == 1 { d ^ 0x3FFF_FFC0 } else { d };
+
+    // Which carry bit feeds each of D25..D30.
+    const CARRY_IS_D29: [bool; 6] = [true, false, true, false, false, true];
+
+    for (i, (&mask, &from_d29)) in PARITY_MASKS.iter().zip(CARRY_IS_D29.iter()).enumerate() {
+        let carry = if from_d29 { d29_star } else { d30_star };
+        word |= ((carry + (mask & d).count_ones()) % 2) << (5 - i as u32);
+    }
+
+    word
 }
 
 // ── Ephemeris → subframe words ────────────────────────────────────────────────
@@ -222,39 +247,82 @@ pub fn eph_to_subframes(eph: &Ephemeris, iono: &IonoUtc) -> [[u32; 10]; 53] {
 
 // ── Real-time navigation message injection ────────────────────────────────────
 
-/// Inject GPS time (TOW), carry bits (D29\*/D30\*), and parity into 60 nav words.
+// ── Frame geometry ────────────────────────────────────────────────────────────
+
+/// Subframes in one navigation frame (IS-GPS-200 §20.3.2).
+pub const SUBFRAMES_PER_FRAME: usize = 5;
+
+/// Words in one frame — 5 subframes × 10 words.
 ///
-/// Called once per 30-second interval (= one navigation message cycle) to
-/// update the `dwrd` ring that the IQ generation loop reads bit-by-bit.
+/// At 50 bps this is exactly 30 s: 50 words × 30 bits × 20 ms. The frame buffer
+/// is sized to that so the word counter wraps precisely on the 30-second GPS
+/// frame boundary, with no dead words to transmit.
+pub const WORDS_PER_FRAME: usize = SUBFRAMES_PER_FRAME * 10;
+
+/// Duration of one navigation frame in seconds.
+pub const FRAME_SECS: f64 = 30.0;
+
+/// Duration of one subframe in seconds.
+pub const SUBFRAME_SECS: f64 = 6.0;
+
+/// Round `t` down to the start of the navigation frame containing it.
+///
+/// Frames are aligned to 30-second GPS epochs; a receiver assumes every subframe
+/// begins on a 6-second boundary and derives transmit time from that assumption,
+/// so the generated bit stream must honour it.
+pub fn frame_start(t: GpsTime) -> GpsTime {
+    GpsTime {
+        week: t.week,
+        // The epsilon absorbs the float drift from repeated 0.1 s accumulation.
+        sec: ((t.sec + 1e-6) / FRAME_SECS).floor() * FRAME_SECS,
+    }
+}
+
+// ── Real-time navigation message injection ────────────────────────────────────
+
+/// Build one 30-second navigation frame: 5 subframes, 50 words.
 ///
 /// # Parameters
-/// - `sbf`:   Raw 53×10 subframe array from [`eph_to_subframes`].
-/// - `grx`:   Current GPS receiver time.
-/// - `ipage`: Which subframe 4/5 page to broadcast (0-indexed, 0–24).
+/// - `sbf`:       Raw 53×10 subframe array from [`eph_to_subframes`].
+/// - `g0`:        Frame start time. **Must be 30-second aligned** — pass
+///   [`frame_start`]. The TOW written into each HOW is derived from it, so a
+///   misaligned `g0` makes the receiver place every subframe at the wrong
+///   instant and biases its time solution.
+/// - `ipage`:     Which subframe 4/5 almanac page to broadcast (0–24).
+/// - `prev_word`: Last word of the *previous* frame, so that parity chains
+///   unbroken across the frame boundary. Pass 0 for the very first frame.
 ///
 /// # Returns
-/// 60 decoded nav words (6 subframes × 10 words), ready for bit extraction:
-/// `bit = (dwrd[iword] >> (29 - ibit)) & 1`.
+/// The 50 frame words plus the final word, to be fed back as `prev_word` next
+/// time. Bits are extracted as `(dwrd[iword] >> (29 - ibit)) & 1`.
 #[expect(
     clippy::indexing_slicing,
-    reason = "sbf[row][w]: row is in rows[] (max 4+2*24=52<53), w<10; dwrd[base+w]: base+w<60"
+    reason = "sbf[row][w]: row is in rows[] (max 4+2*24=52<53), w<10; dwrd[base+w]: base+w<50"
 )]
-pub fn generate_nav_msg(sbf: &[[u32; 10]; 53], grx: GpsTime, ipage: usize) -> [u32; 60] {
-    let mut dwrd = [0u32; 60];
+pub fn generate_nav_msg(
+    sbf: &[[u32; 10]; 53],
+    g0: GpsTime,
+    ipage: usize,
+    prev_word: u32,
+) -> ([u32; WORDS_PER_FRAME], u32) {
+    let mut dwrd = [0u32; WORDS_PER_FRAME];
 
     // Subframes 1–3 are in rows 0–2.
     // Subframe 4 page = row 3 + 2*ipage; Subframe 5 page = row 4 + 2*ipage.
     let rows = [0usize, 1, 2, 3 + 2 * ipage, 4 + 2 * ipage];
 
+    // TOW count of the frame start, in 6-second units.
+    let tow_base = (g0.sec / SUBFRAME_SECS) as u32;
+
+    let mut prev = prev_word;
+
     for (sf_idx, &row) in rows.iter().enumerate() {
-        let base = sf_idx * 10; // offset into dwrd[]
+        let base = sf_idx * 10;
 
-        // TOW count = number of 6-second intervals elapsed in the current week,
-        // counting the interval that *starts* with this subframe.
-        // sf_idx offsets successive subframes within the frame.
-        let tow = (grx.sec / 6.0) as u32 + sf_idx as u32 + 1;
+        // IS-GPS-200 §20.3.3.2: the HOW carries the TOW count of the *start of
+        // the next* subframe, hence the +1.
+        let tow = tow_base + sf_idx as u32 + 1;
 
-        let mut prev_word = 0u32;
         for w in 0..10 {
             let mut word = sbf[row][w];
 
@@ -263,75 +331,278 @@ pub fn generate_nav_msg(sbf: &[[u32; 10]; 53], grx: GpsTime, ipage: usize) -> [u
                 word = (word & !(0x1FFFF << 13)) | ((tow & 0x1FFFF) << 13);
             }
 
-            // D29* = D29 parity bit of prev_word = bit 1.
-            // D30* = D30 parity bit of prev_word = bit 0.
-            // Place them into bits 31–30 of the new word (as the parity algorithm expects).
-            // Matches osqzss: sbfwrd |= (prevwrd<<30) & 0xC0000000UL
-            word = (word & 0x3FFF_FFFF) | ((prev_word << 30) & 0xC000_0000);
-            let d30_star = (prev_word & 0x1) == 1;
+            // Carry the previous word's D29/D30 into bits 31–30.
+            word = (word & 0x3FFF_FFFF) | ((prev << 30) & 0xC000_0000);
 
-            let checked = compute_checksum(word, d30_star);
+            // Words 2 and 10 of every subframe carry the two solved bits.
+            let nib = w == 1 || w == 9;
+
+            let checked = compute_checksum(word, nib);
             dwrd[base + w] = checked;
-            prev_word = checked;
+            prev = checked;
         }
     }
 
-    dwrd
+    (dwrd, prev)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "test code indexes fixed-size nav arrays and bit slices with loop-bounded indices"
+)]
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        EMPTY_WORD, FRAME_SECS, PARITY_MASKS, SUBFRAMES_PER_FRAME, WORDS_PER_FRAME,
+        eph_to_subframes, frame_start, generate_nav_msg,
+    };
+    use crate::gps_sim::types::{Ephemeris, GpsTime, IonoUtc};
 
-    #[test]
-    fn parity_zero_data_zero_carry() {
-        // All-zero data with no carry bits → all parity bits must be zero.
-        let result = compute_checksum(0, false);
-        assert_eq!(result & 0x3F, 0, "parity of zero word should be 0");
+    /// Verify one word the way a GPS receiver does: recover the data bits using
+    /// D30\*, recompute the six parity bits, and compare against what was sent.
+    ///
+    /// This is the decode direction, not a re-run of the encoder — it operates on
+    /// the transmitted (possibly complemented) word and reverses that step first.
+    fn receiver_parity_ok(word: u32, prev_word: u32) -> bool {
+        let d29_star = prev_word & 0x2 != 0;
+        let d30_star = prev_word & 0x1 != 0;
+
+        // Recover the uncomplemented data bits.
+        let received = word & 0x3FFF_FFC0;
+        let d = if d30_star {
+            received ^ 0x3FFF_FFC0
+        } else {
+            received
+        };
+
+        let carry_is_d29 = [true, false, true, false, false, true];
+        let mut expected = 0u32;
+        for (i, (&mask, &from_d29)) in PARITY_MASKS.iter().zip(carry_is_d29.iter()).enumerate() {
+            let carry = u32::from(if from_d29 { d29_star } else { d30_star });
+            expected |= ((carry + (mask & d).count_ones()) % 2) << (5 - i as u32);
+        }
+
+        expected == (word & 0x3F)
     }
 
-    #[test]
-    fn parity_all_ones_no_carry() {
-        // 24 data bits all set → check that parity is deterministic (not zero).
-        let data = 0x3FFF_FFC0u32; // 24 data bits set, carry = 0
-        let result = compute_checksum(data, false);
-        // Parity bits are in [5:0]; data bits should pass through.
-        assert_eq!(result & 0x3FFF_FFC0, data);
+    /// A fully-populated ephemeris. Every field is non-zero on purpose: a
+    /// degenerate all-zero ephemeris produces legitimately-zero nav words, which
+    /// would mask a word the encoder never wrote.
+    fn realistic_eph(g0_sec: f64) -> Ephemeris {
+        let mut eph = Ephemeris::default();
+        eph.valid = true;
+        eph.sqrta = 5153.6;
+        eph.ecc = 0.004_312;
+        eph.m0 = 0.913_7;
+        eph.inc0 = 0.961_2;
+        eph.omg0 = -1.234_5;
+        eph.aop = 0.784_1;
+        eph.omgdot = -8.13e-9;
+        eph.idot = 2.4e-10;
+        eph.deltan = 4.7e-9;
+        eph.crs = -17.5;
+        eph.crc = 233.7;
+        eph.cuc = -1.02e-6;
+        eph.cus = 8.11e-6;
+        eph.cic = 1.86e-8;
+        eph.cis = -9.31e-8;
+        eph.af0 = -1.23e-4;
+        eph.af1 = -9.09e-12;
+        eph.af2 = 3.2e-18;
+        eph.tgd = -1.02e-8;
+        eph.iode = 61;
+        eph.iodc = 61;
+        eph.sva = 2;
+        eph.svh = 0;
+        eph.toe = GpsTime {
+            week: 2367,
+            sec: g0_sec,
+        };
+        eph.toc = eph.toe;
+        eph
     }
 
-    #[test]
-    fn parity_d30_star_flips_data() {
-        // With D30* set, data bits must be complemented before parity.
-        let data = 0x0000_0040u32; // only one data bit set
-        let with_carry = compute_checksum(data, true);
-        let without_carry = compute_checksum(data, false);
-        // The parity should differ because data bits are complemented.
-        assert_ne!(
-            with_carry & 0x3F,
-            without_carry & 0x3F,
-            "D30* should change parity"
-        );
-    }
-
-    #[test]
-    fn generate_nav_msg_60_words() {
-        let eph = super::super::types::Ephemeris::default();
-        let iono = super::super::types::IonoUtc::default();
+    fn test_frame(g0_sec: f64) -> ([u32; WORDS_PER_FRAME], u32) {
+        let eph = realistic_eph(g0_sec);
+        let iono = IonoUtc::default();
         let sbf = eph_to_subframes(&eph, &iono);
-        let dwrd = generate_nav_msg(
+        generate_nav_msg(
             &sbf,
             GpsTime {
-                week: 2300,
-                sec: 0.0,
+                week: 2367,
+                sec: g0_sec,
             },
             0,
+            0,
+        )
+    }
+
+    /// Every word of a frame must pass a receiver's parity check.
+    ///
+    /// This is the check that was failing for ~75% of words: the parity bits
+    /// omitted their D29\*/D30\* carry term, so only words that happened to
+    /// follow a word ending in `00` were accepted.
+    #[test]
+    fn every_word_passes_receiver_parity() {
+        let (dwrd, _) = test_frame(216_000.0);
+
+        let mut prev = 0u32;
+        for (i, &word) in dwrd.iter().enumerate() {
+            assert!(
+                receiver_parity_ok(word, prev),
+                "word {i} (subframe {}, word {}) fails receiver parity: \
+                 0x{word:08X} after prev 0x{prev:08X}",
+                i / 10 + 1,
+                i % 10 + 1,
+            );
+            prev = word;
+        }
+    }
+
+    /// Parity must chain unbroken across the 30 s frame boundary, or the first
+    /// word of every frame fails and the receiver loses subframe sync.
+    #[test]
+    fn parity_chains_across_frame_boundary() {
+        let (frame_a, last_a) = test_frame(216_000.0);
+
+        let sbf = eph_to_subframes(&realistic_eph(216_000.0), &IonoUtc::default());
+        let (frame_b, _) = generate_nav_msg(
+            &sbf,
+            GpsTime {
+                week: 2367,
+                sec: 216_030.0,
+            },
+            1,
+            last_a,
         );
-        assert_eq!(dwrd.len(), 60);
-        // Preamble should survive in word 0 (subframe 1 TLM word).
-        // After checksum the top 8 data bits contain 0x8B.
-        let tlm_data = (dwrd[0] >> 22) & 0xFF;
-        assert_eq!(tlm_data, 0x8B, "TLM preamble 0x8B not found after parity");
+
+        assert_eq!(last_a, frame_a[WORDS_PER_FRAME - 1]);
+        assert!(
+            receiver_parity_ok(frame_b[0], last_a),
+            "first word of the next frame fails parity against the previous frame's last word",
+        );
+    }
+
+    /// IS-GPS-200: words 2 and 10 of every subframe must end with D29 = D30 = 0.
+    ///
+    /// An external constraint the encoder has to satisfy by solving the two
+    /// non-information-bearing bits — independent of how parity is computed.
+    #[test]
+    fn words_2_and_10_have_zero_trailing_parity() {
+        let (dwrd, _) = test_frame(216_000.0);
+
+        for sf in 0..SUBFRAMES_PER_FRAME {
+            for w in [1usize, 9] {
+                let word = dwrd[sf * 10 + w];
+                assert_eq!(
+                    word & 0x3,
+                    0,
+                    "subframe {} word {}: D29/D30 must be zero, got 0x{word:08X}",
+                    sf + 1,
+                    w + 1,
+                );
+            }
+        }
+    }
+
+    /// No word may be left blank — a run of zero bits destroys subframe sync.
+    #[test]
+    fn frame_is_completely_populated() {
+        let (dwrd, _) = test_frame(216_000.0);
+        let blank: Vec<usize> = (0..WORDS_PER_FRAME).filter(|&i| dwrd[i] == 0).collect();
+        assert!(
+            blank.is_empty(),
+            "frame has {} unpopulated words at {blank:?}",
+            blank.len(),
+        );
+        assert_eq!(WORDS_PER_FRAME, 50, "a frame is 30 s at 50 bps");
+    }
+
+    /// Each subframe starts with the TLM preamble and carries its own ID.
+    #[test]
+    fn subframe_headers_are_wellformed() {
+        let (dwrd, _) = test_frame(216_000.0);
+
+        for sf in 0..SUBFRAMES_PER_FRAME {
+            let tlm = dwrd[sf * 10];
+            // The TLM word may be transmitted complemented; check both polarities.
+            let preamble = (tlm >> 22) & 0xFF;
+            assert!(
+                preamble == 0x8B || preamble == (!0x8Bu32 & 0xFF),
+                "subframe {} has no 0x8B preamble (got 0x{preamble:02X})",
+                sf + 1,
+            );
+
+            let how = dwrd[sf * 10 + 1];
+            let d30_star = dwrd[sf * 10] & 0x1 != 0;
+            let how_data = if d30_star { how ^ 0x3FFF_FFC0 } else { how };
+            let sfid = (how_data >> 8) & 0x7;
+            assert_eq!(sfid, sf as u32 + 1, "subframe ID in HOW word");
+        }
+    }
+
+    /// The TOW in each HOW must name the start of the *next* subframe, derived
+    /// from a 30-second-aligned frame start.
+    ///
+    /// This is what a receiver converts into transmit time; if the frame is not
+    /// aligned, or the TOW is off by a subframe, the position solution is wrong
+    /// even though acquisition and tracking work perfectly.
+    #[test]
+    fn tow_matches_aligned_frame_start() {
+        let g0_sec = 216_000.0;
+        let (dwrd, _) = test_frame(g0_sec);
+        let tow_base = (g0_sec / 6.0) as u32;
+
+        for sf in 0..SUBFRAMES_PER_FRAME {
+            let how = dwrd[sf * 10 + 1];
+            let d30_star = dwrd[sf * 10] & 0x1 != 0;
+            let how_data = if d30_star { how ^ 0x3FFF_FFC0 } else { how };
+            let tow = (how_data >> 13) & 0x1FFFF;
+            assert_eq!(
+                tow,
+                tow_base + sf as u32 + 1,
+                "subframe {} TOW should point at the next subframe boundary",
+                sf + 1,
+            );
+        }
+    }
+
+    /// `frame_start` must snap to 30 s and tolerate accumulated float drift.
+    #[test]
+    fn frame_start_aligns_to_30s() {
+        for (input, expected) in [
+            (216_000.0, 216_000.0),
+            (216_017.3, 216_000.0),
+            (216_029.999, 216_000.0),
+            (216_030.0, 216_030.0),
+            // Drift from repeatedly adding 0.1 s must not fall into the previous frame.
+            (216_029.999_999_9, 216_030.0),
+        ] {
+            let got = frame_start(GpsTime {
+                week: 2367,
+                sec: input,
+            });
+            assert!(
+                (got.sec - expected).abs() < 1e-6,
+                "frame_start({input}) = {}, expected {expected}",
+                got.sec,
+            );
+        }
+        assert!((FRAME_SECS - 30.0).abs() < f64::EPSILON);
+    }
+
+    /// Unused almanac pages still have to be valid, parity-bearing words.
+    #[test]
+    fn empty_pages_are_not_all_zero() {
+        let sbf = eph_to_subframes(&Ephemeris::default(), &IonoUtc::default());
+        assert_ne!(EMPTY_WORD, 0);
+        // Subframe 4/5 page 1 lives at rows 3 and 4.
+        for row in [3usize, 4] {
+            for w in 2..10 {
+                assert_ne!(sbf[row][w], 0, "row {row} word {w} is blank");
+            }
+        }
     }
 }

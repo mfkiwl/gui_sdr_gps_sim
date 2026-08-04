@@ -49,6 +49,9 @@ crossterm        = "0.28"
 
 [dev-dependencies]
 approx = "0.5"
+# Spectrum analysis for the end-to-end signal-chain tests (tests/signal_chain.rs).
+rustfft = "6"
+tempfile = "3"
 
 [profile.release]
 opt-level = 3
