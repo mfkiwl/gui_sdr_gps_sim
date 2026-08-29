@@ -189,6 +189,10 @@ impl Channel {
         ch.dwrd = dwrd;
         ch.last_word = last;
         ch.refresh_data_bit();
+        // A channel can start anywhere in the frame, including inside the last
+        // subframe. Prepare the successor now so the first wrap is a plain copy
+        // however soon it arrives.
+        ch.prepare_next_frame();
 
         Some(ch)
     }
@@ -205,6 +209,16 @@ impl Channel {
     /// the 30-second frame it swaps in the frame prepared by
     /// [`Self::prepare_next_frame`], so the bit stream continues seamlessly and
     /// the parity chain carries over.
+    ///
+    /// If that frame has not been prepared, it is built here rather than
+    /// skipped. A channel that starts inside the last subframe of a frame — any
+    /// run whose first transmit time falls in the final six seconds of a
+    /// 30-second epoch — reaches its first wrap before the caller has had a
+    /// chance to call [`Self::prepare_next_frame`]. Silently keeping the old
+    /// frame there re-transmits it with its old TOW, and every frame afterwards
+    /// stays exactly 30 s behind the signal: the receiver tracks perfectly,
+    /// decodes a valid ephemeris, and places every satellite 30 s of orbit away
+    /// from where it is.
     pub fn advance_nav_bit(&mut self) {
         self.ibit += 1;
         if self.ibit >= 30 {
@@ -213,6 +227,9 @@ impl Channel {
             self.iword += 1;
             if self.iword >= WORDS_PER_FRAME {
                 self.iword = 0;
+                if self.g0_next.is_none() {
+                    self.build_next_frame();
+                }
                 if let Some(g) = self.g0_next.take() {
                     self.dwrd = self.dwrd_next;
                     self.last_word = self.last_word_next;
@@ -237,6 +254,11 @@ impl Channel {
         if self.g0_next.is_some() || self.iword < WORDS_PER_FRAME - 10 {
             return;
         }
+        self.build_next_frame();
+    }
+
+    /// Build the frame following [`Self::g0`], unconditionally.
+    fn build_next_frame(&mut self) {
         let g_next = self.g0.add_secs(navmsg::FRAME_SECS);
         let page_next = (self.ipage + 1) % 25;
         let (words, last) = navmsg::generate_nav_msg(&self.sbf, g_next, page_next, self.last_word);
@@ -402,7 +424,7 @@ mod tests {
     // word, and confirm the decoded TOW matches where the bits actually sit in
     // time.
 
-    use crate::gps_sim::navmsg::{PARITY_MASKS, SUBFRAME_SECS, WORDS_PER_FRAME};
+    use crate::gps_sim::navmsg::{FRAME_SECS, PARITY_MASKS, SUBFRAME_SECS, WORDS_PER_FRAME};
     use crate::gps_sim::types::consts::SPEED_OF_LIGHT;
 
     /// Pack 30 transmitted bits (MSB first) into the encoder's word layout:
@@ -641,6 +663,96 @@ mod tests {
         assert!(
             checks >= 8,
             "expected to verify TOW on at least 8 subframes, verified {checks}",
+        );
+    }
+
+    /// Drive a channel the way `generate_iq` really does, starting at a time
+    /// where it begins inside the **last subframe** of a frame, and check the
+    /// TOW across the frame wrap.
+    ///
+    /// `capture_bits` calls `prepare_next_frame()` before every single bit, so
+    /// the next frame is always ready and the wrap is always a copy. The IQ
+    /// generator calls it once per 100 ms step, *after* generating that step's
+    /// samples — so a channel whose first transmit time lands in the final six
+    /// seconds of a 30-second epoch (any run started on or just after a frame
+    /// boundary) reaches its first wrap before the first call.
+    ///
+    /// When the wrap found no prepared frame it used to keep the old one: the
+    /// frame was re-transmitted with its original TOW and every frame after it
+    /// stayed exactly 30 s behind the signal. Nothing at the signal level shows
+    /// this — parity holds, bit sync holds, the ephemeris decodes — but the
+    /// receiver places every satellite 30 s of orbit from where it is, and the
+    /// position residuals never close.
+    #[test]
+    fn tow_survives_the_first_wrap_when_started_in_the_final_subframe() {
+        let iono = IonoUtc::default();
+        let eph = overhead_eph_populated();
+        let rx = rx_ecef();
+
+        // Find an epoch where the satellite is visible *and* the transmit time
+        // sits in the last subframe of its frame, so the first wrap comes early.
+        let grx = (0..24 * 60 * 6)
+            .map(|k| GpsTime {
+                week: WEEK,
+                sec: f64::from(k) * 10.0,
+            })
+            .find(|&g| {
+                compute_range(&eph, &iono, g, rx).is_some_and(|rho| {
+                    let t_tx = g.sec - rho.range / SPEED_OF_LIGHT;
+                    t_tx > 0.0 && t_tx % FRAME_SECS >= FRAME_SECS - SUBFRAME_SECS
+                })
+            })
+            .expect("some visible epoch must start inside a final subframe");
+
+        let rho = compute_range(&eph, &iono, grx, rx).expect("visible at chosen epoch");
+        let t_tx = grx.sec - rho.range / SPEED_OF_LIGHT;
+        let bit0_start = (t_tx / BIT_SECS).floor() * BIT_SECS;
+
+        let mut ch = Channel::new(Constellation::Gps, 1, &eph, &iono, grx, rx)
+            .expect("channel should be created for a visible satellite");
+        assert!(
+            ch.iword >= WORDS_PER_FRAME - 10,
+            "test needs a channel starting in the final subframe, got word {}",
+            ch.iword,
+        );
+
+        // Two frames of bits, driven exactly like `generate_iq`: five nav bits
+        // per 100 ms step, with `prepare_next_frame` called after the step.
+        let n_bits = (WORDS_PER_FRAME * 2 + 20) * 30;
+        let mut bits = Vec::with_capacity(n_bits);
+        bits.push(u32::from(ch.data_bit > 0));
+        for i in 1..n_bits {
+            ch.advance_nav_bit();
+            bits.push(u32::from(ch.data_bit > 0));
+            // One 100 ms step is five 20 ms nav bits.
+            if i % 5 == 0 {
+                ch.prepare_next_frame();
+            }
+        }
+
+        let skip = first_subframe_index(bit0_start);
+        let mut checks = 0usize;
+        let mut idx = skip;
+        while idx + 60 <= bits.len() {
+            let tlm = pack_word(&bits[idx..idx + 30]);
+            let how = pack_word(&bits[idx + 30..idx + 60]);
+            let tow = word_data(how, tlm) >> 7;
+
+            let subframe_start = bit0_start + idx as f64 * BIT_SECS;
+            let expected = (subframe_start / SUBFRAME_SECS).round() as u32 + 1;
+            assert_eq!(
+                tow,
+                expected,
+                "subframe at t={subframe_start:.2}s carries TOW={tow}, expected \
+                 {expected} -- the frame is {}s behind the signal",
+                (i64::from(expected) - i64::from(tow)) * 6,
+            );
+            checks += 1;
+            idx += 300;
+        }
+        assert!(
+            checks >= 8,
+            "expected to verify TOW across the wrap on at least 8 subframes, got {checks}",
         );
     }
 
