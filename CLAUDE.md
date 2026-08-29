@@ -117,15 +117,33 @@ The rate flows from `effective_sample_rate()` → each `run_*` backend → `gene
 
 **Navigation message (`navmsg.rs` + `channel.rs`) — the data layer:**
 
-A receiver can acquire and track a perfectly-formed signal and still never report a position. Everything that decides *position* lives in the 50 bps data layer, and none of it is visible to a spectrum plot or an acquisition search. Three invariants must hold:
+A receiver can acquire and track a perfectly-formed signal and still never report a position. Everything that decides *position* lives in the 50 bps data layer, and none of it is visible to a spectrum plot or an acquisition search. Five invariants must hold:
 
 1. **Parity (IS-GPS-200 Table 20-XIV).** Each of the six parity bits XORs in one of the previous word's two carry bits: D25/D27/D30 chain from D29\*, and D26/D28/D29 chain from D30\*. Parity is computed over the *uncomplemented* data, while the transmitted data bits are complemented when D30\* is set. Dropping the carry term leaves parity correct only when both carry bits are zero — about one word in four — and every subframe is then discarded by the receiver.
 2. **Words 2 and 10** of every subframe carry two non-information-bearing bits (23 and 24), solved so the resulting D29 and D30 are zero. That is the `nib` flag on `compute_checksum`.
 3. **Frame timing.** A frame is exactly 50 words = 30 s at 50 bps, aligned to a 30-second GPS epoch (`frame_start`). Each subframe's HOW carries the TOW of the **next** subframe boundary. `Channel::init_code_phase` positions the bit counters from the signal's *transmit* time (`grx - range/c`), not from `grx`, because that is the reference the receiver reconstructs from the TOW.
+4. **Bit-field placement (IS-GPS-200 Table 20-I / Fig. 20-1).** The 24 data bits of a word sit at shifts 29..6, so a field spanning data bits *n*..*m* goes at shift `30 - m`. Two consequences the encoder gets wrong easily and no parity or spectrum check will ever notice:
+   - **SV health** is data bits 17–22 of subframe 1 word 3 (shift 8), between URA (13–16, shift 14) and the IODC MSBs (23–24, shift 6). Put anything else at shift 13 and the health MSB comes up set, which Table 20-VII defines as *"some or all navigation data are bad"* — every receiver then drops the satellite after acquiring and tracking it perfectly.
+   - **M0, e, √A, Ω0, i0 and ω** are 32-bit quantities split into an 8-bit MSB field in one word and a 24-bit LSB field in the next. The MSB field needs `pack_hi(.., lo_bits = 24, ..)`; packing it with `pack` silently repeats the *low* byte and the decoded orbit lands thousands of kilometres away.
+
+   Subframe 1's clock block also lives in words 7–10 (TGD, IODC LSB + toc, af2 + af1, af0), not 4–7; words 4–6 are reserved.
+5. **The frame wrap must always advance.** `advance_nav_bit()` swaps in the frame built by `prepare_next_frame()`; if none has been built it builds one itself rather than keeping the current frame. A channel can start anywhere in its frame — `init_code_phase` positions it from the *transmit* time, so any run beginning on or just after a 30-second epoch starts in the final subframe (word ≥ 40) and reaches its first wrap within ~70 ms, long before `generate_iq` gets to its once-per-100 ms `prepare_next_frame()` call. Re-transmitting the old frame there leaves the TOW exactly 30 s behind the signal *permanently*: parity holds, bit sync holds, the ephemeris decodes, and the receiver places every satellite 30 s of orbit — a few km of range, varying per satellite — from where it is, so the least-squares residuals never close. `Channel::new` also pre-builds the successor so the common case stays a plain copy.
 
 The frame buffer is sized to exactly one frame so the word counter wraps precisely on the frame boundary — a buffer longer than a frame transmits dead words. `Channel::prepare_next_frame()` builds the following frame once the channel reaches word 40, and `advance_nav_bit()` swaps it in at the wrap, carrying `last_word` across so parity chains unbroken. Both are driven by the channel's own word counter rather than the step index, so frames stay aligned with that satellite's Doppler-shifted bit stream.
 
 *Known hard limit*: BeiDou B1C (10.23 Mcps) needs >20.46 MSPS, which exceeds the HackRF's 20 MSPS maximum — over-the-air B1C is aliased at 1.95 samples/chip and the simulator warns about it. This is a hardware ceiling only: file/UDP/TCP sinks generate B1C at 25 MSPS, above Nyquist. GPS and Galileo clear Nyquist on every sink.
+
+**Scenario time and ephemeris selection (`sim.rs`) — what a receiver checks that a decoder does not:**
+
+`resolve_start_time(StartTime::Now, ..)` returns the **current** GPS time. It must not fall back to the RINEX file's first epoch — that quietly stamps a run started at 22:00 with a timestamp from midnight. A software receiver still fixes on that signal, because it has no independent clock to disagree with; a phone holds network time and cached assistance data and rejects it. The file's own epoch is used only when the system clock reads before 1980.
+
+`merge_eph_sets()` then builds the ephemeris a receiver would actually hold: **per satellite**, its own most recent record at or before `g0`. The parser groups records into per-epoch sets on a one-hour boundary, but satellites do not upload together, so a day's broadcast file routinely ends with a set holding a *single* satellite that refreshed minutes ago. Selecting the one set nearest `g0` picks that set and transmits a one-satellite constellation. Ranking prefers a record already in force over one from the future; a run whose freshest ephemeris is more than two hours old logs a `warn!` suggesting a fresher file.
+
+These two are coupled: making `Now` mean now is what exposes the tail of the file, so neither is safe to change alone.
+
+**Pacing (`generate_iq`):** generation is paced by **back-pressure, not by a clock**. `producer.acquire()` blocks once every FIFO buffer is outstanding, which is how the C reference paces its generator — it has no sleep at all. A wall-clock sleep on top of that can only make generation slower than the consumer, never faster, because the sleep always overshoots; measured at +0.35% per step, which drains the FIFO and then underruns the HackRF on every buffer for the rest of the run. None of that is visible in an IQ file, which is written from the same samples whenever they were produced — generation is deterministic in the step index, and two runs from the same `StartTime::Gps` are byte-identical. The `pace` flag is therefore `true` only for `UdpStream`, the one sink with no peer to block on. With the gate gone, 45 s of signal generates in ~6 s.
+
+**Ephemeris staleness:** IS-GPS-200 gives a 4-hour curve fit, so an ephemeris is valid only for `toe ± 2 h`. Past that a strict receiver discards it — it acquires, tracks, decodes clean subframes and still reports no position. `run()` warns through both `log::warn!` and a `SimEvent::Status` (so it reaches the GUI, not just the log) when the **median** ephemeris age exceeds 2 h. Median, not freshest: a broadcast file routinely ends with one SV that refreshed minutes ago, and the freshest age would call that constellation current while its other thirty members sit hours past reference.
 
 **Signal-chain tests:**
 
@@ -135,7 +153,19 @@ The RINEX fixture is generated in-test (`synth_rinex()`), so no nav file is need
 
 When changing the signal chain, verify a test still fails with the bug reintroduced — several of these checks are only load-bearing because their bands are chosen carefully.
 
+**Decoding a capture end to end:** `gnuradio/gps_nav_decode.py` is a complete software receiver over an IQ file — acquire, track, decode the navigation message, form pseudoranges, solve for position:
+
+```bash
+python gnuradio/gps_nav_decode.py --file capture.iq --truth 52.3791 4.9003 5.0
+```
+
+It needs ≥35 s of capture. Three lines carry most of the diagnostic value: the satellite count in the simulator's own `Tracking N satellites` line (a low count means the ephemeris merge picked up a nearly-empty tail set), `subframe t_tx` — which must equal the GPS time the simulator printed at start-up, a shortfall of a multiple of 30 s meaning the frame is running behind the signal — and the residual rms, which should be tens of metres — that is the iono/tropo delay the simulator adds and this tool does not correct. Kilometre residuals mean the pseudoranges and the broadcast ephemeris disagree. Prefer this over an acquisition search when a receiver tracks but will not fix; acquisition passes in every one of those cases.
+
 **Navigation-message tests** live in `channel.rs` and decode the bit stream the way a receiver does: pull bits via `advance_nav_bit()`, check parity on every word, locate the preamble, and compare the decoded TOW against where the bits actually sit in time.
+
+`navmsg.rs` adds the complementary layer: `subframe_1_clock_fields_round_trip`, `subframe_2_and_3_orbit_fields_round_trip`, `satellites_are_broadcast_healthy` and `iode_matches_iodc_lsbs` decode each field back out by its IS-GPS-200 **data-bit number** and compare against the ephemeris that went in. They deliberately do not reuse the encoder's shift constants, so a field written into the wrong word shows up as a wrong *value* rather than as a matching mistake on both sides. Every parity and framing test passes with those fields misplaced — that is why the round-trip tests exist.
+
+A test also has to drive the channel the way `generate_iq` does. `capture_bits` calls `prepare_next_frame()` before *every* bit, so the wrap is always a plain copy and invariant 5 above can never fail inside it; `tow_survives_the_first_wrap_when_started_in_the_final_subframe` instead calls it once per five bits (one 100 ms step) and picks an epoch whose transmit time lands in a frame's final subframe. Every other test in the suite passes with that bug reintroduced.
 
 These tests anchor their expectations to `grx` and the pseudorange — **never to the channel's own `g0` or word counters**. A test that reads its expectation out of the state it is checking will agree with a uniformly-shifted timeline, which is exactly the bug class that lets a receiver track happily and never fix. If you add tests here, derive ground truth independently.
 
