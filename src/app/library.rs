@@ -213,7 +213,7 @@ impl MyApp {
 
     /// Copies `lib_edit_points` into `draw_route_points`, pre-fills `route_name`
     /// and `velocity` from the library entry, and switches the route source to
-    /// [`RouteSource::DrawImport`] so the user can generate a new CSV from the
+    /// `RouteSource::DrawImport` so the user can generate a new CSV from the
     /// edited geometry.
     ///
     /// Also clears `lib_edit_entry_idx` so the editor is dismissed.

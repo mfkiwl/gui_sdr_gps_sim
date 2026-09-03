@@ -13,7 +13,7 @@
 //!     .rinex("brdc0010.24n")
 //!     .location(Location::degrees(52.3676, 4.9041, 5.0)) // Amsterdam
 //!     .duration_secs(300)
-//!     .output(SdrOutput::HackRf { gain_db: 20, amp: false })
+//!     .output(SdrOutput::HackRf { gain_db: 47, amp: false })
 //!     .build().unwrap()
 //!     .run().unwrap();
 //! ```
