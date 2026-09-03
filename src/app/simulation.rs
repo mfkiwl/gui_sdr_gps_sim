@@ -133,7 +133,7 @@ impl MyApp {
 
     /// Spawns the static looping simulation worker thread.
     ///
-    /// Resets shared state, builds [`crate::simulator::SimSettings`] from current
+    /// Resets shared state, builds `SimSettings` from current
     /// UI values, and spawns a thread that runs the GPS signal generator at a
     /// fixed position in an indefinite loop until the stop flag is set.
     pub fn start_static_simulation(&mut self) {
@@ -219,7 +219,7 @@ impl MyApp {
 
     /// Spawns the interactive simulation worker thread.
     ///
-    /// Resets shared state, builds [`crate::simulator::SimSettings`] from current
+    /// Resets shared state, builds `SimSettings` from current
     /// UI values, resets the [`crate::gps_sim::InteractiveState`] to zero, and
     /// spawns a thread that runs the GPS signal generator driven by egui key events
     /// until the stop flag is set.

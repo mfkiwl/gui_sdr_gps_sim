@@ -41,11 +41,12 @@ The goal is a polished, easy-to-use desktop application — not just a command-l
    - [GPX / KML import](#gpx--kml-import)
 8. [Manage Waypoints](#manage-waypoints)
 9. [Manage UMF Routes](#manage-umf-routes)
-10. [GNU Radio flow graphs](#gnu-radio-flow-graphs)
-11. [File layout](#file-layout)
-12. [Building from source](#building-from-source)
-13. [Contributing](#contributing)
-14. [License](#license)
+10. [Verifying a capture](#verifying-a-capture)
+11. [GNU Radio flow graphs](#gnu-radio-flow-graphs)
+12. [File layout](#file-layout)
+13. [Building from source](#building-from-source)
+14. [Contributing](#contributing)
+15. [License](#license)
 
 ---
 
@@ -137,6 +138,8 @@ Rust 1.88 is selected automatically from the `rust-toolchain` file.
 
 1. **Launch the app** and navigate to the **GPS Simulator** page using the left sidebar.
 2. **Download a RINEX file** — click *Download Today's RINEX* to fetch the current broadcast ephemeris from NASA. This RINEX 3 file contains satellite orbit data for GPS, BeiDou, and Galileo.
+
+   Download it *shortly before you transmit*. An ephemeris is only valid for about two hours either side of its reference time — beyond that a strict receiver discards it and will never report a position, however clean the signal looks. The app warns you when the file it loaded is more than two hours stale.
 3. **Create a route** (optional for static mode) — go to **Create UMF Route**, draw a path on the map or fetch one from the ORS API, set a speed, and click *Generate User Motion File*.
 4. **Select the route** — back on the GPS Simulator page, click the route in the Route Library table.
 5. **Click Start** — the simulation begins. Watch the position marker move along the route on the live map.
@@ -207,7 +210,7 @@ The **Settings** tab applies to all three modes. Changes take effect the next ti
 | Setting | Description |
 |---|---|
 | **Output type** | Where to send the IQ samples — see [SDR output options](#sdr-output-options) below |
-| **TX VGA Gain (dB)** | HackRF baseband TX gain, 0–47 dB. Start at 20 dB and increase if the GPS receiver doesn't acquire. |
+| **TX VGA Gain (dB)** | HackRF baseband TX gain, 0–47 dB. Defaults to 47 dB. Over the air a receiver typically needs most of that range; turn it down for a direct cable connection, where 47 dB will overdrive the receiver. |
 | **RF Amplifier** | Enables the HackRF built-in +14 dB RF pre-amplifier. Use only when needed — can overdrive a directly connected receiver. |
 
 #### Signal timing
@@ -384,6 +387,35 @@ Shows all route CSV files found in `./umf/` with their distance, estimated durat
 
 ---
 
+## Verifying a capture
+
+Recording an IQ file and looking at its spectrum tells you the signal is
+*present*. It cannot tell you whether a receiver will get a **fix** — everything
+that decides position lives in the 50 bps navigation data and in the
+code-phase-to-pseudorange relationship, and none of it is visible to a spectrum
+plot or an acquisition search.
+
+`gnuradio/gps_nav_decode.py` is a complete software receiver that runs the whole
+path over a capture and reports the answer as a position:
+
+```bash
+# generate a capture (Settings → Output type → IQ File), then:
+python gnuradio/gps_nav_decode.py --file capture.iq --truth 52.3791 4.9003 5.0
+```
+
+It needs at least ~35 s of capture. Three lines carry most of the diagnosis:
+
+| Line | What it means |
+|---|---|
+| `Tracking N satellites` (from the app) | a low count means ephemeris selection found little usable data — get a fresher RINEX |
+| `subframe t_tx` | must equal the GPS time the app printed at start-up; a shortfall of a multiple of 30 s means the navigation frame lags the signal |
+| `residual rms` | tens of metres is correct — no ionospheric or tropospheric correction is applied here. Kilometres mean the pseudoranges and the broadcast ephemeris disagree |
+
+For a HackRF-to-HackRF capture add `--dopp-max 40000`: two radios run from
+independent crystals, which differ by tens of kHz at L1.
+
+---
+
 ## GNU Radio flow graphs
 
 The `gnuradio/` folder contains ready-to-use GNU Radio flow graphs for working with the app's network output.
@@ -469,8 +501,23 @@ sudo pacman -S gnuradio gr-osmosdr python-pyqt5
 gui_sdr_gps_sim/
 ├── src/
 │   ├── main.rs              Entry point — window, icon, fonts
-│   ├── app.rs               App state, page/tab enums
-│   ├── ui.rs                All UI rendering
+│   ├── lib.rs               Module declarations; re-exports MyApp
+│   ├── app/                 Application state and the actions the UI defers
+│   │   ├── mod.rs           MyApp struct (serde-persisted), Default, eframe::App
+│   │   ├── state.rs         AppPage / RouteSource / SimTab / AppStatus enums
+│   │   ├── routes.rs        Route generation (ORS, drawn, GeoJSON)
+│   │   ├── library.rs       Route-library scan, load, edit, delete
+│   │   ├── waypoints.rs     Waypoint load/save/edit/delete
+│   │   └── simulation.rs    Simulator start-up and RINEX download
+│   ├── ui/                  One module per page
+│   │   ├── mod.rs           Per-frame update(); polls background tasks
+│   │   ├── chrome.rs        Menu bar, sidebar, central-panel dispatch
+│   │   ├── widgets.rs       Shared headings, tables, map zoom controls
+│   │   ├── home.rs          Home page
+│   │   ├── route.rs         Create UMF Route page
+│   │   ├── waypoints.rs     Manage Waypoints page
+│   │   ├── library.rs       Manage UMF Routes page
+│   │   └── sim/             GPS Simulator page (dynamic/fixed/interactive/settings)
 │   ├── map_plugin.rs        Map plugins (markers, route lines, editor)
 │   ├── simulator/
 │   │   ├── mod.rs           Public simulator API
@@ -484,6 +531,8 @@ gui_sdr_gps_sim/
 │   │   ├── beidou           BeiDou B1C Weil code generation (PRN 1–63)
 │   │   ├── galileo          Galileo E1-B/C LFSR code generation (PRN 1–36)
 │   │   ├── navmsg           GPS navigation message generation
+│   │   ├── channel          Per-satellite code phase, Doppler and nav frame
+│   │   ├── coords           WGS-84 / ECEF / local-tangent conversions
 │   │   ├── rinex            RINEX 2/3 multi-constellation ephemeris parser
 │   │   ├── signal           IQ sample accumulation (100 ms blocks)
 │   │   ├── fifo             8 × 262 KB lock-free FIFO
@@ -500,12 +549,16 @@ gui_sdr_gps_sim/
 │   ├── geo.rs               Coordinate maths + CSV writer
 │   ├── import.rs            GPX / KML parser
 │   └── paths.rs             Working directory helpers
-├── gnuradio/                GNU Radio flow graphs + README
+├── gnuradio/                Analysis tools + GNU Radio flow graphs
+│   ├── gps_nav_decode.py    Software receiver: decode a capture, solve a position
+│   ├── gps_acquisition.py   Parallel code-phase acquisition search
+│   └── plot_iq_file.py      Spectrum and IQ-statistics plots
 ├── assets/img/              Embedded UI images
 ├── umf/                     Generated route CSVs, GeoJSON, library.json
 ├── waypoint/                Saved waypoints
 ├── Rinex_files/             Downloaded RINEX navigation files
 ├── rust-toolchain           Pins Rust 1.88
+├── CHANGELOG.md             Release history
 └── check.sh                 Local CI script
 ```
 

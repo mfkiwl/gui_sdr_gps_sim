@@ -9,8 +9,8 @@
 //! 3. Extend to 10230 chips by appending the specified truncation sequence.
 //!
 //! # Accuracy note
-//! The per-SV Weil index `w` and phase offset values embedded in [`W_DATA`] and
-//! [`PHASE_DATA`] are taken from BDS-SIS-ICD-B1C-1.0 Table 5-1 for PRNs 1–10
+//! The per-SV Weil index `w` and phase offset values embedded in `W_DATA` and
+//! `PHASE_DATA` are taken from BDS-SIS-ICD-B1C-1.0 Table 5-1 for PRNs 1–10
 //! and are derived values for PRNs 11–63.  The first ten entries match the ICD
 //! exactly; the remaining entries use a deterministic spacing formula.
 //!

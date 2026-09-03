@@ -2159,7 +2159,7 @@ dependencies = [
 
 [[package]]
 name = "gui_sdr_gps_sim"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "approx",
  "chrono",

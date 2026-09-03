@@ -1,8 +1,12 @@
 //! Top-level simulator: builder, runner, and IQ generation loop.
 //!
+//! This module is private; [`crate::gps_sim`] re-exports its public surface and
+//! carries the compiled example. The sketch below is illustrative only — a
+//! doctest inside a private item is never run.
+//!
 //! # Usage
 //!
-//! ```no_run
+//! ```text
 //! use gui_sdr_gps_sim::gps_sim::{Simulator, Location, SdrOutput};
 //!
 //! Simulator::builder()
