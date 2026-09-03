@@ -25,14 +25,16 @@ use std::time::{Duration, Instant};
 use super::channel::Channel;
 use super::coords::llh_to_ecef;
 use super::fifo::IqFifo;
-use super::navmsg::generate_nav_msg;
 use super::rinex::NavData;
 use super::signal::{COS_TABLE, SIN_TABLE, ant_pattern_linear};
 use super::types::{
-    Constellation, GpsTime, Location, StartTime,
-    consts::{CARR_TO_CODE, HACKRF_BUF_BYTES, LAMBDA_L1, MAX_CHANNELS, SAMPLE_RATE, STEP_SECS},
+    Constellation, Ephemeris, GpsTime, Location, StartTime,
+    consts::{HACKRF_BUF_BYTES, MAX_CHANNELS, STEP_SECS},
 };
 use super::{SdrOutput, SimError};
+
+/// Wall-clock duration of one simulation step, used only by the UDP pacing gate.
+const STEP_PERIOD: Duration = Duration::from_millis(100);
 
 // ── Status events ─────────────────────────────────────────────────────────────
 
@@ -572,6 +574,50 @@ pub struct Simulator {
     use_galileo: bool,
 }
 
+/// Choose the IQ sample rate for a given constellation and output sink.
+///
+/// | Constellation | Chip rate | Nyquist | Preferred | On `HackRF`/Pluto |
+/// |---|---|---|---|---|
+/// | GPS L1 C/A | 1.023 Mcps | 2.05 MSPS | **3 MSPS** (2.93 samps/chip) | 3 MSPS |
+/// | Galileo E1-B | 4.092 Mcps | 8.18 MSPS | **10 MSPS** (2.44 samps/chip) | 10 MSPS |
+/// | `BeiDou` B1C | 10.23 Mcps | 20.46 MSPS | **25 MSPS** (2.44 samps/chip) | 20 MSPS (clamped) |
+///
+/// `widest` must be the highest-chip-rate constellation that is enabled, since
+/// all active constellations share one output buffer.
+///
+/// The preferred rate is clamped to [`SdrOutput::max_sample_rate`] when the sink
+/// is a physical SDR.  File, UDP, TCP, and null sinks have no ceiling, so B1C is
+/// generated above Nyquist there rather than aliased — that is what makes an IQ
+/// recording usable by an external receiver.  Clamping below Nyquist is logged
+/// as a warning rather than rejected, because a slightly-aliased B1C signal on a
+/// `HackRF` is still the best that hardware can do.
+///
+/// `override_hz` (from [`SimulatorBuilder::hackrf_sample_rate`]) always wins.
+fn select_sample_rate(override_hz: Option<f64>, widest: Constellation, output: &SdrOutput) -> f64 {
+    if let Some(rate) = override_hz {
+        return rate;
+    }
+
+    let preferred = widest.preferred_sample_rate();
+    let rate = match output.max_sample_rate() {
+        Some(max) if preferred > max => max,
+        _ => preferred,
+    };
+
+    if rate < widest.nyquist_rate() {
+        log::warn!(
+            "{widest:?} needs {:.2} MSPS to satisfy Nyquist but this output caps at {:.2} MSPS \
+             ({:.2} samples/chip). The main lobe will alias and receiver correlation will be \
+             degraded — use an IQ file, UDP, or TCP sink for a full-rate recording.",
+            widest.nyquist_rate() / 1e6,
+            rate / 1e6,
+            rate / widest.chip_rate(),
+        );
+    }
+
+    rate
+}
+
 impl Simulator {
     /// Return a builder with all settings at their defaults.
     pub fn builder() -> SimulatorBuilder {
@@ -594,26 +640,29 @@ impl Simulator {
         self.stop.clone()
     }
 
-    /// Select the IQ sample rate appropriate for the active constellations.
+    /// The widest-bandwidth constellation currently enabled.
     ///
-    /// | Constellation | Chip rate | Min rate | Auto-selected |
-    /// |---|---|---|---|
-    /// | GPS L1 C/A | 1.023 Mcps | 2.05 MSPS | **3 MSPS** |
-    /// | Galileo E1-B | 4.092 Mcps | 8.18 MSPS | **10 MSPS** (2.44 samps/chip) |
-    /// | `BeiDou` B1C | 10.23 Mcps | 20.46 MSPS | **20 MSPS** (`HackRF` max, 1.95 samps/chip) |
-    ///
-    /// A manually-set [`SimulatorBuilder::hackrf_sample_rate`] always takes precedence.
-    fn effective_sample_rate(&self) -> f64 {
-        if let Some(rate) = self.hackrf_sample_rate {
-            return rate;
-        }
+    /// The output buffer is shared by all active constellations, so the sample
+    /// rate has to satisfy the most demanding one.
+    fn widest_constellation(&self) -> Constellation {
         if self.use_beidou {
-            20_000_000.0 // BeiDou B1C needs ~20.46 MSPS; 20 MSPS is the HackRF maximum
+            Constellation::BeiDou
         } else if self.use_galileo {
-            10_000_000.0 // Galileo E1-B needs ~8.18 MSPS; 10 MSPS gives 2.44 samples/chip
+            Constellation::Galileo
         } else {
-            SAMPLE_RATE // GPS L1 C/A: 3 MSPS gives 2.93 samples/chip
+            Constellation::Gps
         }
+    }
+
+    /// Select the IQ sample rate for the active constellations and sink.
+    ///
+    /// See [`select_sample_rate`] for the selection rules.
+    fn effective_sample_rate(&self) -> f64 {
+        select_sample_rate(
+            self.hackrf_sample_rate,
+            self.widest_constellation(),
+            &self.output,
+        )
     }
 
     /// Run the simulation on a background OS thread and return a [`SimulatorHandle`].
@@ -705,8 +754,33 @@ impl Simulator {
         // Resolve start time to GPS time.
         let g0 = resolve_start_time(self.start, &self.nav);
 
-        // Choose the ephemeris set whose reference time is closest to g0.
-        let ieph = best_eph_set(&self.nav, g0);
+        // Collapse the per-epoch sets into the single set a receiver would hold
+        // at g0 — each satellite contributing its own most recent ephemeris.
+        self.nav.gps = vec![merge_eph_sets(&self.nav.gps, g0)];
+        self.nav.beidou = vec![merge_eph_sets(&self.nav.beidou, g0)];
+        self.nav.galileo = vec![merge_eph_sets(&self.nav.galileo, g0)];
+        self.nav.count = 1;
+        let ieph = 0usize;
+
+        // A stale nav file still produces a perfectly good-looking signal, and
+        // that is the trap: IS-GPS-200 gives a 4-hour curve fit, so an ephemeris
+        // is only valid for toe +/- 2 h. Past that a strict receiver discards it
+        // outright -- it acquires, tracks, decodes clean subframes, and still
+        // reports no position. Surface it where the operator is looking, not
+        // only in the log.
+        if let Some(age) = self.nav.gps.first().and_then(|s| eph_age_secs(s, g0)) {
+            if age > 2.0 * 3_600.0 {
+                let msg = format!(
+                    "WARNING: ephemeris is {:.1} h past its reference time (valid \u{b1}2 h). \
+                     Receivers may reject it \u{2014} download today's RINEX file.\n",
+                    age / 3_600.0,
+                );
+                log::warn!("{}", msg.trim_end());
+                if let Some(f) = &self.on_event {
+                    f(SimEvent::Status(msg));
+                }
+            }
+        }
 
         // Apply ionospheric disable.
         if self.ionospheric_disable {
@@ -871,6 +945,7 @@ impl Simulator {
                     use_beidou,
                     use_galileo,
                     sample_rate,
+                    false,
                 );
                 producer.shutdown();
             })
@@ -976,6 +1051,7 @@ impl Simulator {
                     use_beidou,
                     use_galileo,
                     sample_rate,
+                    false,
                 );
                 producer.shutdown();
             })
@@ -1049,6 +1125,7 @@ impl Simulator {
                     use_beidou,
                     use_galileo,
                     sample_rate,
+                    false,
                 );
                 producer.shutdown();
             })
@@ -1148,6 +1225,7 @@ impl Simulator {
                     use_beidou,
                     use_galileo,
                     sample_rate,
+                    true,
                 );
                 producer.shutdown();
             })
@@ -1241,6 +1319,7 @@ impl Simulator {
                     use_beidou,
                     use_galileo,
                     sample_rate,
+                    false,
                 );
                 producer.shutdown();
             })
@@ -1317,6 +1396,7 @@ fn generate_iq(
     use_beidou: bool,
     use_galileo: bool,
     sample_rate: f64,
+    pace: bool,
 ) {
     // Derive timing constants from the runtime sample rate so that GPS (3 MSPS),
     // Galileo (10 MSPS), and BeiDou (20 MSPS) all advance their codes correctly.
@@ -1440,6 +1520,31 @@ fn generate_iq(
 
         let step_start = Instant::now();
 
+        // ── Re-anchor every channel to this step's geometry ───────────────────
+        // Done at the *top* of the step, against this step's receiver position
+        // and GPS time, so the samples that follow are generated from the same
+        // instant the pseudorange describes. `resync` sets the code phase and
+        // bit counters from that pseudorange and derives the Doppler from it,
+        // which is what the C reference's `computeCodePhase()` does once per
+        // 100 ms. Letting the code NCO free-run instead turns the phase into a
+        // rate integral, and every rate error — including the receiver's own
+        // motion, which the analytic rate cannot see — accumulates without
+        // bound and pulls the position solution off the true point.
+        for ch in &mut channels {
+            let eph_slice = match ch.constellation {
+                Constellation::Gps => gps_eph_set,
+                Constellation::BeiDou => bds_eph_set,
+                Constellation::Galileo => gal_eph_set,
+            };
+            if let Some(eph) = eph_slice.get(ch.prn as usize - 1) {
+                if let Some(rho) = super::orbit::compute_range(eph, &nav.iono, grx, pos) {
+                    ch.resync(&rho, grx);
+                    ch.azel = rho.azel;
+                    ch.d = rho.d;
+                }
+            }
+        }
+
         // ── Per-channel gain for this step ────────────────────────────────────
         // Matches the C reference (multi-sdr-gps-sim):
         //   gain[i] = path_loss * ant_gain   (double, ≈ 0.1 – 1.0)
@@ -1492,13 +1597,7 @@ fn generate_iq(
                     if ch.icode >= 20 {
                         // Start of a new navigation bit.
                         ch.icode = 0;
-                        ch.ibit += 1;
-                        if ch.ibit >= 30 {
-                            // Start of a new navigation word.
-                            ch.ibit = 0;
-                            ch.iword = (ch.iword + 1) % 60;
-                        }
-                        ch.data_bit = ((ch.dwrd[ch.iword] >> (29 - ch.ibit)) & 1) as i32 * 2 - 1;
+                        ch.advance_nav_bit();
                     }
                 }
                 // Update the spreading chip from the continuous code-phase accumulator
@@ -1529,51 +1628,39 @@ fn generate_iq(
             }
         }
 
-        // ── Real-time gate ────────────────────────────────────────────────────
-        // Sleep for the remainder of the 100 ms step so that the GPS thread
-        // generates samples at the correct wall-clock rate when writing to
-        // HackRF.  For IQ-file output this gate is not necessary, but keeping
-        // it here avoids overflowing the FIFO.
-        let elapsed = step_start.elapsed();
-        let target = Duration::from_millis(100);
-        if elapsed < target {
-            std::thread::sleep(target - elapsed);
+        // ── Pacing ────────────────────────────────────────────────────────────
+        // Sinks that hand samples to hardware or to a socket peer are already
+        // paced by back-pressure: `producer.acquire()` blocks as soon as every
+        // FIFO buffer is outstanding, which is exactly how the C reference paces
+        // its generator — it has no sleep at all.
+        //
+        // A wall-clock sleep on top of that can only make generation *slower*
+        // than the consumer, never faster, because the sleep always overshoots.
+        // Measured here at +0.35% per step: the FIFO drains, and once it is
+        // empty the HackRF underruns on every buffer for the rest of the run.
+        // Nothing about that is visible in an IQ file, which is written from the
+        // same samples regardless of when they were produced.
+        //
+        // Only a sink with no back-pressure of its own needs the gate — UDP has
+        // no peer to block on, so without it the datagrams outrun the receiver.
+        if pace {
+            let elapsed = step_start.elapsed();
+            if elapsed < STEP_PERIOD {
+                std::thread::sleep(STEP_PERIOD - elapsed);
+            }
         }
 
         // ── Advance GPS time ──────────────────────────────────────────────────
         grx = grx.add_secs(STEP_SECS);
 
-        // ── Update satellite positions every step ─────────────────────────────
+        // ── Prepare the next navigation frame ─────────────────────────────────
+        // Built once per frame, as soon as the channel enters its final subframe
+        // (word 40 of 50 — six seconds of lead time).  Each channel is driven by
+        // its own word counter rather than by the step index, so the frames stay
+        // aligned with that satellite's Doppler-shifted bit stream instead of
+        // drifting against a wall-clock schedule.
         for ch in &mut channels {
-            let eph_slice = match ch.constellation {
-                Constellation::Gps => gps_eph_set,
-                Constellation::BeiDou => bds_eph_set,
-                Constellation::Galileo => gal_eph_set,
-            };
-            if let Some(eph) = eph_slice.get(ch.prn as usize - 1) {
-                if let Some(rho) = super::orbit::compute_range(eph, &nav.iono, grx, pos) {
-                    // Update Doppler from the range rate.
-                    let rho_rate = rho.rate;
-                    ch.f_carr = -rho_rate / LAMBDA_L1;
-                    // Code rate = nominal chip rate + Doppler-scaled code correction.
-                    // The carrier-to-code ratio (1540 for GPS L1) maps carrier Doppler
-                    // to code Doppler.  For BeiDou and Galileo the ratio differs slightly
-                    // (B1C: 1540.0, E1: 1540.0 at 1575.42 MHz) but is unity at L1 for
-                    // all three; reuse CARR_TO_CODE as a good approximation.
-                    ch.f_code = ch.chip_rate + ch.f_carr / CARR_TO_CODE;
-                    ch.azel = rho.azel;
-                    ch.d = rho.d;
-                }
-            }
-        }
-
-        // ── Regenerate navigation message every 30 s ──────────────────────────
-        // One navigation message cycle = 300 steps × 0.1 s = 30 s.
-        if step % 300 == 299 {
-            for ch in &mut channels {
-                ch.ipage = (ch.ipage + 1) % 25;
-                ch.dwrd = generate_nav_msg(&ch.sbf, grx, ch.ipage);
-            }
+            ch.prepare_next_frame();
         }
 
         // ── Progress event (every step) ───────────────────────────────────────
@@ -1728,6 +1815,16 @@ fn load_motion_csv(path: &str) -> Result<Vec<[f64; 3]>, SimError> {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Convert `StartTime` to an absolute `GpsTime`.
+///
+/// `StartTime::Now` means the current time, not the RINEX file's first epoch.
+/// A real receiver holds its own coarse time — from the network, from an RTC,
+/// or from cached assistance data — and checks the broadcast time against it.
+/// Transmitting a day-old timestamp is the one discrepancy a phone is most
+/// likely to reject outright, and it costs nothing to get right: today's
+/// broadcast file already covers the current hour, and [`best_eph_set`] picks
+/// the ephemeris set nearest whatever `g0` comes out of here.
+///
+/// The RINEX epoch is used only when the system clock is unusable.
 fn resolve_start_time(start: StartTime, nav: &NavData) -> GpsTime {
     match start {
         StartTime::Gps(g) => g,
@@ -1742,12 +1839,12 @@ fn resolve_start_time(start: StartTime, nav: &NavData) -> GpsTime {
             let gps_secs = unix_secs - 315_964_800.0 + 18.0;
             let week = (gps_secs / GpsTime::SECS_PER_WEEK) as i32;
             let sec = gps_secs % GpsTime::SECS_PER_WEEK;
-            // If the RINEX file has a specific epoch, use it instead of now.
-            let rinex_time = best_rinex_time(nav);
-            if rinex_time.week > 0 {
-                rinex_time
-            } else {
+            if week > 0 {
                 GpsTime { week, sec }
+            } else {
+                // Clock unreadable or set before 1980 — the file's own epoch is
+                // the only time reference left.
+                best_rinex_time(nav)
             }
         }
     }
@@ -1761,18 +1858,345 @@ fn best_rinex_time(nav: &NavData) -> GpsTime {
         .unwrap_or_default()
 }
 
-/// Select the GPS ephemeris set whose reference time is closest to `g0`.
-fn best_eph_set(nav: &NavData, g0: GpsTime) -> usize {
-    nav.gps
+/// Build the ephemeris a receiver would actually hold at `g0`: for every
+/// satellite, its own most recent record.
+///
+/// A broadcast file groups records into per-epoch sets, but satellites do not
+/// upload together. A day's file routinely ends with a set holding a *single*
+/// satellite that refreshed a few minutes ago, so picking the one set nearest
+/// `g0` can leave the simulator transmitting one SV. Each real satellite
+/// broadcasts its own latest ephemeris, so select per satellite rather than per
+/// set: the newest record at or before `g0`, or the earliest one afterwards
+/// when the file begins later than `g0`.
+fn merge_eph_sets<const N: usize>(sets: &[[Ephemeris; N]], g0: GpsTime) -> [Ephemeris; N] {
+    // Rank: a record already in force beats one from the future, and among
+    // those, the closest to `g0` wins.
+    let rank = |e: &Ephemeris| {
+        let dt = e.toe.sub(g0);
+        (dt > 0.0, dt.abs())
+    };
+    std::array::from_fn(|i| {
+        sets.iter()
+            .filter_map(|set| set.get(i))
+            .filter(|e| e.valid)
+            .min_by(|a, b| {
+                let (fa, da) = rank(a);
+                let (fb, db) = rank(b);
+                fa.cmp(&fb).then(da.total_cmp(&db))
+            })
+            .copied()
+            .unwrap_or_default()
+    })
+}
+
+/// Median age of the ephemerides in `set` relative to `g0`, in seconds.
+///
+/// Positive means the data is older than the scenario time.
+///
+/// The median, not the freshest: satellites refresh at their own times, so a
+/// single SV that uploaded minutes ago would otherwise hide a constellation
+/// whose other thirty members are hours past their reference time.
+fn eph_age_secs(set: &[Ephemeris], g0: GpsTime) -> Option<f64> {
+    let mut ages: Vec<f64> = set
         .iter()
-        .enumerate()
-        .min_by_key(|(_, set)| {
-            set.iter()
-                .filter(|e| e.valid)
-                .map(|e| e.toe.sub(g0).abs() as i64)
-                .min()
-                .unwrap_or(i64::MAX)
+        .filter(|e| e.valid)
+        .map(|e| -e.toe.sub(g0))
+        .collect();
+    if ages.is_empty() {
+        return None;
+    }
+    ages.sort_by(f64::total_cmp);
+    ages.get(ages.len() / 2).copied()
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::Ephemeris;
+    use super::{
+        Constellation, GpsTime, NavData, SdrOutput, StartTime, eph_age_secs, merge_eph_sets,
+        resolve_start_time, select_sample_rate,
+    };
+    use crate::gps_sim::types::IonoUtc;
+
+    /// A `NavData` holding only the given GPS ephemeris sets.
+    fn nav_with(sets: Vec<[Ephemeris; 32]>) -> NavData {
+        NavData {
+            count: sets.len(),
+            gps: sets,
+            beidou: Vec::new(),
+            galileo: Vec::new(),
+            iono: IonoUtc::default(),
+        }
+    }
+
+    /// `StartTime::Now` must resolve to the present, not to the RINEX epoch.
+    ///
+    /// It used to compute the system time and then throw it away in favour of
+    /// the file's first ephemeris epoch, so a run started at 22:00 with today's
+    /// broadcast file transmitted a timestamp from midnight. Nothing in the
+    /// signal looks wrong and a software receiver still fixes -- it has no
+    /// independent clock to disagree with. A phone does: it holds network time
+    /// and cached assistance data, and a timestamp hours in the past is exactly
+    /// what makes it discard the constellation it is otherwise tracking.
+    #[test]
+    fn now_resolves_to_the_present_not_the_rinex_epoch() {
+        // A file whose only epoch sits several weeks in the past.
+        let eph = Ephemeris {
+            valid: true,
+            toe: GpsTime {
+                week: 2000,
+                sec: 0.0,
+            },
+            ..Default::default()
+        };
+        let nav = nav_with(vec![std::array::from_fn(|i| {
+            if i == 0 { eph } else { Ephemeris::default() }
+        })]);
+
+        let g = resolve_start_time(StartTime::Now, &nav);
+
+        // Ground truth from the system clock, derived independently here.
+        let unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let gps_secs = unix - 315_964_800.0 + 18.0;
+        let now = GpsTime {
+            week: (gps_secs / GpsTime::SECS_PER_WEEK) as i32,
+            sec: gps_secs % GpsTime::SECS_PER_WEEK,
+        };
+
+        assert!(
+            g.sub(now).abs() < 60.0,
+            "Now resolved to week {} sec {:.1}, which is {:.0} s from the system \
+             clock -- it must mean now",
+            g.week,
+            g.sec,
+            g.sub(now),
+        );
+        assert_ne!(g.week, 2000, "Now must not fall back to the RINEX epoch");
+    }
+
+    /// An explicit start time is passed through untouched — the static loop
+    /// relies on that to keep GPS time continuous across passes.
+    #[test]
+    fn explicit_start_times_are_passed_through() {
+        let nav = nav_with(Vec::new());
+        let g = GpsTime {
+            week: 2433,
+            sec: 518_400.0,
+        };
+        assert_eq!(resolve_start_time(StartTime::Gps(g), &nav).week, g.week);
+        assert!((resolve_start_time(StartTime::Gps(g), &nav).sec - g.sec).abs() < 1e-9);
+    }
+
+    /// Build a set where `prns` are valid with reference time `sec`.
+    fn set_at(sec: f64, prns: &[usize]) -> [Ephemeris; 32] {
+        std::array::from_fn(|i| {
+            let mut e = Ephemeris::default();
+            if prns.contains(&(i + 1)) {
+                e.valid = true;
+                e.toe = GpsTime { week: 2433, sec };
+                e.toc = e.toe;
+            }
+            e
         })
-        .map(|(i, _)| i)
-        .unwrap_or(0)
+    }
+
+    /// Each satellite must contribute its own most recent ephemeris.
+    ///
+    /// A day's broadcast file commonly ends with a set holding one satellite
+    /// that happened to upload a few minutes ago. Selecting the single set
+    /// nearest the start time picks that one and transmits a one-satellite
+    /// constellation — a signal a receiver tracks and can never fix from.
+    #[test]
+    fn every_satellite_contributes_its_latest_ephemeris() {
+        let nav = nav_with(vec![
+            set_at(0.0, &(1..=28).collect::<Vec<_>>()),
+            set_at(64_800.0, &(1..=27).collect::<Vec<_>>()),
+            set_at(69_280.0, &[9]),
+        ]);
+        let g0 = GpsTime {
+            week: 2433,
+            sec: 73_800.0,
+        };
+        let merged = merge_eph_sets(&nav.gps, g0);
+
+        let valid = merged.iter().filter(|e| e.valid).count();
+        assert_eq!(valid, 28, "the whole constellation must survive the merge");
+        assert!(
+            (merged[8].toe.sec - 69_280.0).abs() < 1e-9,
+            "PRN 9 should use its own 69280 s refresh, got {}",
+            merged[8].toe.sec,
+        );
+        assert!(
+            (merged[0].toe.sec - 64_800.0).abs() < 1e-9,
+            "PRN 1 should use the newest set it appears in, got {}",
+            merged[0].toe.sec,
+        );
+        assert!(
+            (merged[27].toe.sec - 0.0).abs() < 1e-9,
+            "PRN 28 only exists in the first set, got {}",
+            merged[27].toe.sec,
+        );
+    }
+
+    /// A record already in force beats one from the future.
+    ///
+    /// Extrapolating backwards from an ephemeris that has not been uploaded yet
+    /// is worse than using the one the satellite is really transmitting.
+    #[test]
+    fn ephemeris_already_in_force_wins_over_a_future_one() {
+        let nav = nav_with(vec![set_at(7_200.0, &[1]), set_at(14_400.0, &[1])]);
+        let g0 = GpsTime {
+            week: 2433,
+            sec: 10_000.0,
+        };
+        let merged = merge_eph_sets(&nav.gps, g0);
+        assert!(
+            (merged[0].toe.sec - 7_200.0).abs() < 1e-9,
+            "should keep the 7200 s record in force, got {}",
+            merged[0].toe.sec,
+        );
+
+        // With only future records, the nearest one is the best available.
+        let nav = nav_with(vec![set_at(14_400.0, &[1]), set_at(21_600.0, &[1])]);
+        let merged = merge_eph_sets(&nav.gps, g0);
+        assert!((merged[0].toe.sec - 14_400.0).abs() < 1e-9);
+    }
+
+    /// Staleness is reported relative to the scenario time, positive for old data.
+    #[test]
+    fn ephemeris_age_is_measured_from_the_start_time() {
+        let set = set_at(3_600.0, &[1]);
+        let g0 = GpsTime {
+            week: 2433,
+            sec: 14_400.0,
+        };
+        let age = eph_age_secs(&set, g0).expect("one valid satellite");
+        assert!((age - 10_800.0).abs() < 1e-6, "age was {age}");
+    }
+
+    /// One freshly-uploaded satellite must not mask a stale constellation.
+    ///
+    /// Broadcast files routinely end with a single SV that refreshed minutes
+    /// ago. Reporting the freshest age would call that constellation current
+    /// while every other satellite sits hours past its reference time — and
+    /// past the +/-2 h validity of its 4-hour curve fit.
+    #[test]
+    fn one_fresh_satellite_does_not_mask_a_stale_constellation() {
+        // Thirty satellites three hours old, one refreshed a minute ago.
+        let mut set = set_at(3_600.0, &(1..=30).collect::<Vec<_>>());
+        set[30] = Ephemeris {
+            valid: true,
+            toe: GpsTime {
+                week: 2433,
+                sec: 14_340.0,
+            },
+            ..Default::default()
+        };
+        let g0 = GpsTime {
+            week: 2433,
+            sec: 14_400.0,
+        };
+        let age = eph_age_secs(&set, g0).expect("valid satellites present");
+        assert!(
+            age > 2.0 * 3_600.0,
+            "median age {age} s should still flag the constellation as stale",
+        );
+    }
+
+    /// Sinks with no hardware ceiling must get the constellation's preferred rate.
+    #[test]
+    fn unconstrained_sinks_use_preferred_rate() {
+        for output in [
+            SdrOutput::Null,
+            SdrOutput::IqFile {
+                path: "x.iq".into(),
+            },
+            SdrOutput::UdpStream {
+                addr: "127.0.0.1:1234".into(),
+            },
+            SdrOutput::TcpServer { port: 1234 },
+        ] {
+            for c in [
+                Constellation::Gps,
+                Constellation::Galileo,
+                Constellation::BeiDou,
+            ] {
+                assert_eq!(
+                    select_sample_rate(None, c, &output),
+                    c.preferred_sample_rate(),
+                    "{c:?} on {output:?} should use its preferred rate",
+                );
+            }
+        }
+    }
+
+    /// A file sink must not be capped at the `HackRF`'s 20 MSPS — generating B1C
+    /// above Nyquist is only possible when no hardware is in the path.
+    #[test]
+    fn beidou_to_file_exceeds_nyquist() {
+        let out = SdrOutput::IqFile {
+            path: "x.iq".into(),
+        };
+        let rate = select_sample_rate(None, Constellation::BeiDou, &out);
+        assert!(
+            rate > Constellation::BeiDou.nyquist_rate(),
+            "B1C to file was {rate} Hz, must exceed {} Hz",
+            Constellation::BeiDou.nyquist_rate(),
+        );
+    }
+
+    /// The `HackRF` ceiling still applies, and B1C is the one signal it clips.
+    #[test]
+    fn hackrf_clamps_beidou_only() {
+        let hackrf = SdrOutput::HackRf {
+            gain_db: 20,
+            amp: false,
+        };
+        assert_eq!(
+            select_sample_rate(None, Constellation::BeiDou, &hackrf),
+            super::super::types::consts::HACKRF_MAX_SAMPLE_RATE,
+        );
+        // GPS and Galileo are already under the ceiling and must pass through.
+        for c in [Constellation::Gps, Constellation::Galileo] {
+            assert_eq!(
+                select_sample_rate(None, c, &hackrf),
+                c.preferred_sample_rate(),
+            );
+        }
+    }
+
+    /// An explicit builder override wins over both preference and hardware cap.
+    #[test]
+    fn explicit_override_wins() {
+        let hackrf = SdrOutput::HackRf {
+            gain_db: 20,
+            amp: false,
+        };
+        assert_eq!(
+            select_sample_rate(Some(2_600_000.0), Constellation::BeiDou, &hackrf),
+            2_600_000.0,
+        );
+    }
+
+    /// Every preferred rate except the HackRF-clamped B1C case must clear Nyquist.
+    #[test]
+    fn preferred_rates_clear_nyquist() {
+        for c in [
+            Constellation::Gps,
+            Constellation::Galileo,
+            Constellation::BeiDou,
+        ] {
+            assert!(
+                c.preferred_sample_rate() > c.nyquist_rate(),
+                "{c:?} preferred rate {} is below Nyquist {}",
+                c.preferred_sample_rate(),
+                c.nyquist_rate(),
+            );
+        }
+    }
 }

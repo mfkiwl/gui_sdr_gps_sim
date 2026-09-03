@@ -31,41 +31,6 @@ import matplotlib.gridspec as gridspec
 # C/A code generator
 # ---------------------------------------------------------------------------
 
-def generate_ca_code(prn: int) -> np.ndarray:
-    """Generate GPS L1 C/A code for PRN 1-37 (returns ±1 chips, 1023 length)."""
-    assert 1 <= prn <= 37, f"PRN must be 1-37, got {prn}"
-    g2_shifts = [
-        5, 6, 7, 8, 17, 18, 139, 140, 141, 251,
-        252, 254, 255, 256, 257, 258, 469, 470, 471, 472,
-        473, 474, 509, 512, 513, 514, 515, 516, 859, 860,
-        861, 862, 145, 175, 52, 21, 237,
-    ]
-    g2shift = g2_shifts[prn - 1]
-
-    reg = np.ones(10, dtype=np.int8)
-    g1 = np.empty(1023, dtype=np.float32)
-    for i in range(1023):
-        g1[i] = reg[9]
-        bit = reg[2] ^ reg[9]
-        reg[1:] = reg[:9]
-        reg[0] = bit
-
-    reg = np.ones(10, dtype=np.int8)
-    g2 = np.empty(1023, dtype=np.float32)
-    for i in range(1023):
-        g2[i] = reg[9]
-        bit = reg[1] ^ reg[2] ^ reg[5] ^ reg[7] ^ reg[8] ^ reg[9]
-        reg[1:] = reg[:9]
-        reg[0] = bit
-
-    g2 = np.roll(g2, -g2shift)
-    ca = g1 * g2         # ±1 chips
-    # Map to NRZ: bit 0→+1, bit 1→−1 already done by the XOR (1→+1, -1→+1? No)
-    # The LFSR outputs 1 and -1 directly since we use XOR on np.int8 ones.
-    # Actually with int8 XOR it'll be 0/1; let me re-implement cleanly.
-    return ca
-
-
 def _ca_code_clean(prn: int) -> np.ndarray:
     """GPS C/A code as {+1, −1} chips (1023 samples)."""
     assert 1 <= prn <= 37
@@ -89,7 +54,12 @@ def _ca_code_clean(prn: int) -> np.ndarray:
 
     g1 = lfsr([2, 9], 1023)
     g2 = lfsr([1, 2, 5, 7, 8, 9], 1023)
-    g2 = np.roll(g2, -shift)
+    # IS-GPS-200 Table 3-Ia gives a G2 *delay*: ca[i] = G1[i] ^ G2[(i - delay) mod 1023].
+    # np.roll(g2, +delay) produces exactly that. Rolling the other way yields a
+    # valid-looking Gold code for the wrong PRN -- it still has the right length,
+    # balance, and autocorrelation, so only a check against the published chips
+    # catches it. PRN 1 must start 1100100000 (octal 1440).
+    g2 = np.roll(g2, shift)
     return g1 * g2
 
 
@@ -113,47 +83,70 @@ def read_sc8(path: str, max_samples: int | None = None) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def pcps_acquire(signal: np.ndarray, prn: int, samp_rate: float,
-                 doppler_range: float = 10_000, doppler_step: float = 500
-                 ) -> tuple[bool, float, int, float]:
+                 doppler_range: float = 10_000, doppler_step: float = 500,
+                 n_periods: int = 20
+                 ) -> tuple[float, int, float, float]:
     """
     Parallel Code Phase Search acquisition for one PRN.
 
+    Correlates each 1 ms code period coherently, then accumulates the correlator
+    *power* across `n_periods` periods non-coherently.  Non-coherent accumulation
+    is what buys sensitivity here: nav data bits flip every 20 ms, so coherent
+    integration cannot usefully be extended past one bit.
+
+    Detection statistic is peak-to-second-peak, measured on the power surface
+    with a +/-1 chip guard band excluded around the main peak.  That metric is
+    self-normalising: pure noise sits near 1.0 regardless of signal level, code
+    length, or how many Doppler bins were searched.
+
+    (A peak-to-mean statistic is *not* self-normalising.  For a surface of
+    n_freq x spc independent noise cells its expected value is the extreme-value
+    ratio -- around 4 for a 41 x 3000 search -- so a "threshold" below that value
+    marks every PRN as acquired, including ones carrying no signal at all.)
+
     Returns:
-        acquired (bool), doppler_hz (float), code_phase (int), peak_ratio (float)
+        doppler_hz, code_phase, peak_metric (peak/second), snr_db
     """
-    spc = int(samp_rate / 1e3)          # samples per code (1 ms)
-    # Use exactly one code period for the search
-    seg = signal[:spc].copy()
+    spc = int(round(samp_rate / 1e3))            # samples per code period (1 ms)
+    n_periods = max(1, min(n_periods, len(signal) // spc))
 
     ca = _ca_code_clean(prn)
-    idx = np.floor(np.linspace(0, 1023, spc, endpoint=False)).astype(int)
-    ca_seq = ca[idx].astype(np.float32)
-    ca_freq = np.conj(np.fft.fft(ca_seq))
+    idx = np.floor(np.arange(spc) * 1023.0 / spc).astype(int)
+    ca_seq = ca[idx].astype(np.float64)
+    ca_conj = np.conj(np.fft.fft(ca_seq))
 
-    t = np.linspace(0, 1e-3, spc, endpoint=False, dtype=np.float32)
+    t = np.arange(spc, dtype=np.float64) / samp_rate
     freq_bins = np.arange(-doppler_range, doppler_range + doppler_step, doppler_step)
-    corr_map = np.zeros((len(freq_bins), spc), dtype=np.float32)
 
+    segs = signal[: spc * n_periods].reshape(n_periods, spc).astype(np.complex128)
+
+    corr = np.zeros((len(freq_bins), spc), dtype=np.float64)
     for fi, fd in enumerate(freq_bins):
-        carrier = np.exp(1j * 2 * np.pi * fd * t).astype(np.complex64)
-        mixed = seg * carrier
-        sig_f = np.fft.fft(mixed)
-        corr = np.abs(np.fft.ifft(sig_f * ca_freq))
-        corr_map[fi, :] = corr
+        carrier = np.exp(-2j * np.pi * fd * t)
+        for seg in segs:
+            sig_f = np.fft.fft(seg * carrier)
+            corr[fi] += np.abs(np.fft.ifft(sig_f * ca_conj)) ** 2
 
-    peak = corr_map.max()
-    peak_fi, peak_ci = np.unravel_index(corr_map.argmax(), corr_map.shape)
+    peak_fi, peak_ci = np.unravel_index(int(corr.argmax()), corr.shape)
+    peak = float(corr[peak_fi, peak_ci])
 
-    # Noise estimate: mean of all bins except the peak row
-    mask = np.ones(len(freq_bins), bool)
-    mask[peak_fi] = False
-    noise = corr_map[mask].mean()
+    # Exclude +/-1 chip around the peak: the correlation triangle spans two
+    # chips, so neighbouring cells are part of the same peak, not noise.
+    guard = int(np.ceil(samp_rate / 1.023e6)) + 1
+    excl = np.zeros(spc, dtype=bool)
+    offsets = np.arange(peak_ci - guard, peak_ci + guard + 1) % spc
+    excl[offsets] = True
 
-    ratio = float(peak / noise) if noise > 0 else 0.0
-    doppler = float(freq_bins[peak_fi])
-    acquired = ratio > 2.5  # typical threshold
+    row = corr[peak_fi]
+    second = float(row[~excl].max()) if (~excl).any() else 0.0
+    metric = peak / second if second > 0 else 0.0
 
-    return acquired, doppler, int(peak_ci), ratio
+    mask = np.ones_like(corr, dtype=bool)
+    mask[peak_fi, excl] = False
+    noise_mean = float(corr[mask].mean())
+    snr_db = 10.0 * np.log10(peak / noise_mean) if noise_mean > 0 else 0.0
+
+    return float(freq_bins[peak_fi]), int(peak_ci), metric, snr_db
 
 
 # ---------------------------------------------------------------------------
@@ -176,20 +169,27 @@ def run_acquisition(iq: np.ndarray, samp_rate: float,
           f"Doppler ±{doppler_range/1e3:.0f} kHz step {doppler_step:.0f} Hz")
 
     for prn in prns:
-        # Use the first period for fast search, then verify with more periods
-        acq, dop, cp, ratio = pcps_acquire(
-            iq[:spc * n_periods], prn, samp_rate, doppler_range, doppler_step
+        dop, cp, metric, snr_db = pcps_acquire(
+            iq, prn, samp_rate, doppler_range, doppler_step, n_periods
         )
-        status = "ACQ" if ratio > threshold else "   "
-        print(f"  PRN {prn:2d}: peak/noise = {ratio:5.2f}  Doppler = {dop:+7.0f} Hz  "
-              f"CodePhase = {cp:5d}  {status}")
+        status = "ACQ" if metric > threshold else "   "
+        print(f"  PRN {prn:2d}: pk/2nd = {metric:5.2f}  SNR = {snr_db:5.1f} dB  "
+              f"Doppler = {dop:+7.0f} Hz  CodePhase = {cp:5d}  {status}")
         results.append({
             "prn": prn,
-            "acquired": ratio > threshold,
+            "acquired": metric > threshold,
             "doppler_hz": dop,
             "code_phase": cp,
-            "peak_ratio": ratio,
+            "peak_ratio": metric,
+            "snr_db": snr_db,
         })
+
+    # Report the observed noise baseline so the threshold can be sanity-checked
+    # against the data rather than assumed.
+    metrics = sorted(r["peak_ratio"] for r in results)
+    median = metrics[len(metrics) // 2]
+    print(f"\nMedian pk/2nd across all PRNs = {median:.2f} "
+          f"(this is the noise baseline; a valid threshold must sit well above it)")
 
     return results
 
@@ -211,8 +211,9 @@ def plot_results(results: list[dict], save_path: str | None = None):
     colors = ["green" if r["acquired"] else "steelblue" for r in results]
     bars = ax.bar(prns, all_ratios, color=colors, edgecolor="black", linewidth=0.5)
     ax.axhline(2.5, color="red", linestyle="--", linewidth=1.2, label="Threshold (2.5)")
+    ax.axhline(1.0, color="gray", linestyle=":", linewidth=1.0, label="Noise floor (1.0)")
     ax.set_xlabel("PRN")
-    ax.set_ylabel("Peak / Noise ratio")
+    ax.set_ylabel("Peak / second-peak ratio")
     ax.set_title("Correlation Peak-to-Noise per PRN")
     ax.legend()
     ax.set_xticks(prns)

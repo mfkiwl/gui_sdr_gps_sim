@@ -43,12 +43,29 @@ pub mod consts {
     /// C/A code chip rate (chips/s).
     pub const CODE_FREQ_CA: f64 = 1_023_000.0;
 
+    /// `BeiDou` B1C data-component chip rate (chips/s).
+    pub const CHIP_RATE_BEIDOU: f64 = 10_230_000.0;
+
+    /// Galileo E1-B chip rate (chips/s).
+    pub const CHIP_RATE_GALILEO: f64 = 4_092_000.0;
+
     /// Carrier-to-code frequency ratio = `FREQ_L1` / `CODE_FREQ_CA` = 1540.
     ///
     /// # Correctness note
     /// Doppler code rate: `f_code = CODE_FREQ_CA + f_carr / CARR_TO_CODE`
     /// (divide by 1540, **not** multiply).
     pub const CARR_TO_CODE: f64 = 1_540.0;
+
+    // ── Hardware sample-rate ceilings ────────────────────────────────────────
+
+    /// Maximum IQ sample rate the `HackRF` One can accept (Hz).
+    pub const HACKRF_MAX_SAMPLE_RATE: f64 = 20_000_000.0;
+
+    /// Maximum IQ sample rate used for ADALM-PLUTO (Hz).
+    ///
+    /// The AD9363 itself goes higher, but USB throughput with 16-bit samples
+    /// makes anything above this unreliable in practice.
+    pub const PLUTO_MAX_SAMPLE_RATE: f64 = 20_000_000.0;
 
     // ── Simulation timing ────────────────────────────────────────────────────
 
@@ -132,6 +149,35 @@ impl Constellation {
             Self::Gps => 32,
             Self::BeiDou => 63,
             Self::Galileo => 36,
+        }
+    }
+
+    /// Spreading-code chip rate (chips/s).
+    pub fn chip_rate(self) -> f64 {
+        match self {
+            Self::Gps => consts::CODE_FREQ_CA,
+            Self::BeiDou => consts::CHIP_RATE_BEIDOU,
+            Self::Galileo => consts::CHIP_RATE_GALILEO,
+        }
+    }
+
+    /// Minimum IQ sample rate that satisfies Nyquist for this signal's main lobe.
+    ///
+    /// Equals `2 × chip_rate`.  Sampling below this aliases the main lobe and
+    /// degrades the correlation peak a receiver sees.
+    pub fn nyquist_rate(self) -> f64 {
+        2.0 * self.chip_rate()
+    }
+
+    /// IQ sample rate this signal is generated at when nothing constrains it.
+    ///
+    /// Chosen at ~2.4–2.9 samples/chip: comfortably above [`Self::nyquist_rate`]
+    /// while keeping the per-sample generation cost bounded.
+    pub fn preferred_sample_rate(self) -> f64 {
+        match self {
+            Self::Gps => consts::SAMPLE_RATE, // 3 MSPS — 2.93 samples/chip
+            Self::Galileo => 10_000_000.0,    // 10 MSPS — 2.44 samples/chip
+            Self::BeiDou => 25_000_000.0,     // 25 MSPS — 2.44 samples/chip
         }
     }
 }

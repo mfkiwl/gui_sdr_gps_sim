@@ -111,14 +111,25 @@ pub fn sat_pos(eph: &Ephemeris, t: GpsTime) -> SatState {
     let ecc_sq = eph.ecc * eph.ecc;
     let dek_dt = n / (1.0 - eph.ecc * cek);
 
-    // dν/dt — avoid division by zero when sin(ν) ≈ 0 (at apogee/perigee).
-    let sin_nu = vk_raw.sin();
-    let dvk_dt = if sin_nu.abs() > 1e-10 {
-        sek * dek_dt * (1.0 + eph.ecc * vk_raw.cos()) / (sin_nu * (1.0 - ecc_sq).sqrt())
-    } else {
-        // At perigee/apogee, use the limit: dν/dt ≈ n(1+e)/(1-e)^(3/2) or (1-e)/(1+e)^(3/2)
-        dek_dt * (1.0 - ecc_sq).sqrt() / (1.0 - eph.ecc * cek).powi(2)
-    };
+    // dν/dt = √(1−e²)·(dE/dt)/(1−e·cos E).
+    //
+    // Differentiating the true-anomaly relation gives dν/dE = √(1−e²)/(1−e·cos E)
+    // directly. The earlier form, written through sin ν and cos ν, collapsed
+    // algebraically to plain `dek_dt`: substituting
+    //   sin ν = √(1−e²)·sin E/(1−e·cos E)   and   1 + e·cos ν = (1−e²)/(1−e·cos E)
+    // cancels the entire eccentricity factor. That understates or overstates
+    // dν/dt by up to e (≈1% for a typical GPS orbit), which propagates into the
+    // in-plane velocity and leaves the line-of-sight range rate wrong by several
+    // metres per second — different for every satellite.
+    //
+    // Nothing about that is visible in a position: `sat_pos` is unaffected, so
+    // the orbit is right and only its derivative is wrong. It shows up once the
+    // code phase is integrated from the rate, as a pseudorange that drifts
+    // linearly and drags the solution off the true point.
+    //
+    // This form has no singularity — 1 − e·cos E ≥ 1 − e > 0 — so the
+    // perigee/apogee special case is gone with it.
+    let dvk_dt = dek_dt * (1.0 - ecc_sq).sqrt() / (1.0 - eph.ecc * cek);
 
     let du_dt = dvk_dt * (1.0 + 2.0 * (eph.cus * cos2vk - eph.cuc * sin2vk));
     let dr_dt = a * eph.ecc * sek * dek_dt + 2.0 * dvk_dt * (eph.crs * cos2vk - eph.crc * sin2vk);
@@ -247,7 +258,81 @@ pub fn compute_range(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gps_sim::coords::llh_to_ecef;
+    use crate::gps_sim::types::Location;
     use approx::assert_relative_eq;
+
+    /// The analytic range rate must equal the derivative of the range it claims
+    /// to differentiate.
+    ///
+    /// Nothing at the signal level notices when it does not: `sat_pos` is
+    /// unaffected, so satellites sit in the right place and only their velocity
+    /// is wrong. The error surfaces once the code phase is integrated from the
+    /// rate — the pseudorange then drifts linearly, by a different amount for
+    /// each satellite, and drags the position solution off the true point at
+    /// metres per second while every parity check and acquisition search still
+    /// passes.
+    ///
+    /// The earlier `dν/dt`, written through sin ν and cos ν, collapsed
+    /// algebraically to plain `dE/dt` and left the rate wrong by up to 5.5 m/s
+    /// on a real ephemeris. A central difference catches that immediately.
+    #[test]
+    fn range_rate_matches_the_numerical_derivative() {
+        let iono = IonoUtc::default();
+        let rx = llh_to_ecef(Location::degrees(52.3791, 4.9003, 5.0));
+        let h = 0.5_f64;
+
+        // Sweep a full orbit so every eccentric anomaly is covered, including the
+        // perigee/apogee region the old code special-cased.
+        let mut checked = 0usize;
+        let mut worst = 0.0_f64;
+        for k in 0..48 {
+            let mut eph = dummy_eph();
+            // A real GPS eccentricity — the error scales with e, and vanishes at e = 0.
+            eph.ecc = 0.012;
+            eph.m0 = f64::from(k) * std::f64::consts::TAU / 48.0;
+            let g = GpsTime {
+                week: eph.toe.week,
+                sec: eph.toe.sec + 600.0,
+            };
+            let (Some(a), Some(b), Some(c)) = (
+                compute_range(&eph, &iono, g, rx),
+                compute_range(
+                    &eph,
+                    &iono,
+                    GpsTime {
+                        week: g.week,
+                        sec: g.sec - h,
+                    },
+                    rx,
+                ),
+                compute_range(
+                    &eph,
+                    &iono,
+                    GpsTime {
+                        week: g.week,
+                        sec: g.sec + h,
+                    },
+                    rx,
+                ),
+            ) else {
+                continue;
+            };
+            let numerical = (c.range - b.range) / (2.0 * h);
+            let err = (a.rate - numerical).abs();
+            worst = worst.max(err);
+            checked += 1;
+        }
+
+        assert!(
+            checked >= 8,
+            "expected several visible epochs, got {checked}"
+        );
+        assert!(
+            worst < 0.05,
+            "range rate is off by {worst:.3} m/s from the derivative of its own range",
+        );
+    }
 
     fn dummy_eph() -> Ephemeris {
         // Circular orbit at GPS altitude — useful for sanity checks.
