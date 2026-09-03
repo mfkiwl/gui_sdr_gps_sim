@@ -4,3 +4,10 @@
 
 [default.extend-words]
 egui = "egui" # Example for how to ignore a false positive
+
+# `WNt` is the IS-GPS-200 name for the UTC reference week number (Table 20-IX);
+# it is a field name from the standard, not an abbreviation of "want".
+wnt = "wnt"
+
+# `ist` is the local binding for an `InteractiveState` handle.
+ist = "ist"

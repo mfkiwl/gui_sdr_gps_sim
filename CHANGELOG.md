@@ -36,7 +36,8 @@ now locks and reports a position roughly 10 m from the simulated point.
   been prepared, and the wrap silently re-transmitted the old frame. Every frame
   afterwards stayed exactly one frame behind.
 - **Subframe 4 page 18** (ionosphere and UTC) had its α/β coefficients shifted a
-  word, A₀/A₁ swapped and mis-split, `tot` unscaled, and the wrong page SV ID.
+  word, A₀/A₁ swapped and split at the wrong bit, `tot` unscaled, and the
+  wrong page SV ID.
 
 ### Fixed — time, ephemeris and pseudoranges
 
