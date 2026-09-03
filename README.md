@@ -5,6 +5,7 @@ This project is a **work in progress**. It has not been thoroughly tested across
 # GUI SDR GPS Simulator
 
 A cross-platform desktop application for **generating and transmitting realistic GNSS signals** via a HackRF One software-defined radio. It supports **GPS L1 C/A**, **BeiDou B1C**, and **Galileo E1** — all three share the 1575.42 MHz carrier and are combined into a single IQ stream. It includes a full route creation toolset so you can simulate a receiver moving along any path in the world — a city walk, a car journey, a flight — and feed that signal to real GNSS hardware.
+Based on and inspired by https://github.com/osqzss/gps-sdr-sim.git and https://github.com/Mictronics/multi-sdr-gps-sim.git
 
 Built in Rust using [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui). Runs natively on **Windows, Linux, and macOS**.
 
