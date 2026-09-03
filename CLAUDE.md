@@ -145,6 +145,25 @@ These two are coupled: making `Now` mean now is what exposes the tail of the fil
 
 **Ephemeris staleness:** IS-GPS-200 gives a 4-hour curve fit, so an ephemeris is valid only for `toe ± 2 h`. Past that a strict receiver discards it — it acquires, tracks, decodes clean subframes and still reports no position. `run()` warns through both `log::warn!` and a `SimEvent::Status` (so it reaches the GUI, not just the log) when the **median** ephemeris age exceeds 2 h. Median, not freshest: a broadcast file routinely ends with one SV that refreshed minutes ago, and the freshest age would call that constellation current while its other thirty members sit hours past reference.
 
+**Code phase is re-anchored, not integrated (`Channel::resync`):**
+
+`generate_iq` calls `resync()` on every channel at the **top** of each 100 ms step, against that step's receiver position and GPS time, before generating any samples — the same thing the C reference's `computeCodePhase()` does. It sets the code phase and bit counters from the current pseudorange and derives the Doppler from it as a backward difference of that pseudorange.
+
+Letting the code NCO free-run between anchors instead makes the phase a *rate integral*, so every error in the rate accumulates without bound. Two errors matter:
+
+- `RangeResult::rate` is the satellite's velocity projected on the line of sight and knows nothing about the **receiver's** motion. On a moving route the code phase drifts by the receiver's own along-line-of-sight speed — metres per second — so the solution never walks the path. The backward difference of the pseudorange picks this up for free, along with the ionospheric and satellite-clock rates.
+- Any residual error in the analytic rate integrates the same way. Re-anchoring bounds it to a single step.
+
+`prev_range` is seeded in `Channel::new` as `rho.range - rho.rate * STEP_SECS`, so the *first* `resync` reproduces the analytic rate. Seeding it with `rho.range` itself makes step 0 differ by nothing and the channel opens with 100 ms of zero-Doppler signal — enough to defeat a receiver that acquires on the first few milliseconds.
+
+**Range rate must equal the derivative of the range (`orbit.rs`):**
+
+`dν/dt = √(1−e²)·(dE/dt)/(1−e·cos E)`. Writing it through `sin ν` and `cos ν` instead looks plausible but collapses algebraically to plain `dE/dt` — substituting `sin ν = √(1−e²)·sin E/(1−e·cos E)` and `1 + e·cos ν = (1−e²)/(1−e·cos E)` cancels the whole eccentricity factor. That understates or overstates dν/dt by up to *e* (≈1%), which reaches the line-of-sight range rate as several m/s, different per satellite.
+
+`sat_pos` is unaffected, so the orbit stays right and only its derivative is wrong: nothing in a position, a spectrum or an acquisition search shows it. It appears once the code phase integrates the rate, as a pseudorange that drifts linearly. `range_rate_matches_the_numerical_derivative` pins it with a central difference swept over a full orbit at a realistic eccentricity.
+
+*Measured on a 75 s static capture, before → after both fixes:* position scatter 28.7/3.2/38.4 m E/N/U → **0.7/0.4/0.8 m**; horizontal drift 98.5 m/48 s → **1.3 m/31 s**; per-satellite pseudorange drift 2.98 m/s → 0.59 m/s. On a 15 m/s route: fitted speed 15.03 m/s, along-track misfit 0.26 m rms, cross-track 0.81 m.
+
 **Signal-chain tests:**
 
 `tests/signal_chain.rs` runs the whole pipeline (synthetic RINEX → IQ file) and asserts on the generated baseband — main lobe vs sidelobes, C/A nulls at ±1.023 MHz, sc8 amplitude range, I/Q balance, and DC concentration. It is the Rust counterpart of `gnuradio/plot_iq_file.py` and guards the fixed bugs listed below.
@@ -159,7 +178,7 @@ When changing the signal chain, verify a test still fails with the bug reintrodu
 python gnuradio/gps_nav_decode.py --file capture.iq --truth 52.3791 4.9003 5.0
 ```
 
-It needs ≥35 s of capture. Three lines carry most of the diagnostic value: the satellite count in the simulator's own `Tracking N satellites` line (a low count means the ephemeris merge picked up a nearly-empty tail set), `subframe t_tx` — which must equal the GPS time the simulator printed at start-up, a shortfall of a multiple of 30 s meaning the frame is running behind the signal — and the residual rms, which should be tens of metres — that is the iono/tropo delay the simulator adds and this tool does not correct. Kilometre residuals mean the pseudoranges and the broadcast ephemeris disagree. Prefer this over an acquisition search when a receiver tracks but will not fix; acquisition passes in every one of those cases.
+It needs ≥35 s of capture. Its tracking loop reports **fractional** sample positions for each code epoch: rounding them to whole samples costs ±0.5 sample, and at 3 MSPS one sample is 100 m of range, which buries every error worth measuring under ~40 m of quantisation noise. Three lines carry most of the diagnostic value: the satellite count in the simulator's own `Tracking N satellites` line (a low count means the ephemeris merge picked up a nearly-empty tail set), `subframe t_tx` — which must equal the GPS time the simulator printed at start-up, a shortfall of a multiple of 30 s meaning the frame is running behind the signal — and the residual rms, which should be tens of metres — that is the iono/tropo delay the simulator adds and this tool does not correct. Kilometre residuals mean the pseudoranges and the broadcast ephemeris disagree. Prefer this over an acquisition search when a receiver tracks but will not fix; acquisition passes in every one of those cases.
 
 **Navigation-message tests** live in `channel.rs` and decode the bit stream the way a receiver does: pull bits via `advance_nav_bit()`, check parity on every word, locate the preamble, and compare the decoded TOW against where the bits actually sit in time.
 
