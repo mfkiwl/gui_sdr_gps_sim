@@ -102,9 +102,14 @@ def acquire(raw, prn, fs, n_ms=10, dopp_max=6000, dopp_step=250):
 def track(raw, prn, fs, dopp0, phase0, n_ms):
     """Costas PLL + normalised early-late DLL.
 
-    Returns prompt I, prompt Q, and the receive sample index at which each 1 ms
-    code period starts -- that index is what turns a decoded TOW into a
+    Returns prompt I, prompt Q, and the receive sample position at which each
+    1 ms code epoch occurs -- that position is what turns a decoded TOW into a
     pseudorange, so it is carried out rather than recomputed from a nominal rate.
+
+    The position is fractional on purpose. Rounding it to the nearest sample
+    costs +/-0.5 sample, and at 3 MSPS one sample is 100 m of range: a whole-sample
+    index alone puts ~40 m of quantisation noise straight into the pseudorange,
+    which is more than the errors worth measuring in a simulated signal.
     """
     code = ca_code(prn)
     carr_f, carr_p = float(dopp0), 0.0
@@ -117,11 +122,13 @@ def track(raw, prn, fs, dopp0, phase0, n_ms):
     pll_i = dll_i = 0.0
 
     oi, oq = np.zeros(n_ms), np.zeros(n_ms)
-    idx = np.zeros(n_ms + 1, dtype=np.int64)
+    idx = np.zeros(n_ms + 1)
     total = raw.size // 2
     k = 0
     for k in range(n_ms):
-        idx[k] = sample
+        # Sample position of this code epoch: back off the fraction of a chip
+        # already accumulated at `sample`, converted to samples.
+        idx[k] = sample - code_p * fs / code_f
         n = int(round((CA_LEN - code_p) * fs / code_f))
         if sample + n >= total:
             break
@@ -144,7 +151,7 @@ def track(raw, prn, fs, dopp0, phase0, n_ms):
         code_f = CHIP_RATE + carr_f / 1540.0 - (dll_a * derr + dll_i * T)
         code_p = code_p + n * code_f / fs - CA_LEN
         sample += n
-    idx[k + 1] = sample
+    idx[k + 1] = sample - code_p * fs / code_f
     return oi[:k], oq[:k], idx[:k + 1]
 
 
