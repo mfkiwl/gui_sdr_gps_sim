@@ -5,6 +5,23 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The app could not create its own directories when launched from a shortcut.**
+  `umf/`, `waypoint/` and `Rinex_files/` were resolved against the process
+  working directory, which a desktop or Start-menu launcher leaves at
+  `C:\Windows\system32`. Downloading a RINEX file there failed with
+  *"Cannot create 'C:\Windows\system32\Rinex_files': Toegang geweigerd.
+  (os error 5)"*, and the same happened for every generated route and waypoint
+  file. All three directories now hang off a data root that is resolved once and
+  probed for writability: `$GUI_SDR_GPS_SIM_DATA_DIR`, then the working
+  directory (skipped when it is a filesystem root or lives under `%SystemRoot%`,
+  so an elevated run does not litter the Windows directory either), then the
+  folder holding the executable, then the per-user data folder. See
+  [Where files are stored](README.md#where-files-are-stored).
+
 ## [0.2.0] — 2026-09-03
 
 **Receivers can now get a position fix.** Every release before this one produced

@@ -3,29 +3,16 @@
 //! The remote server is `gdc.cddis.eosdis.nasa.gov` (anonymous FTPS, port 21).
 //! The synchronous FTP transfer runs inside [`tokio::task::spawn_blocking`] so
 //! the UI thread stays responsive.  The compressed payload is decompressed with
-//! gzip and written to `./Rinex_files/`.
+//! gzip and written to the `Rinex_files` directory under the application data
+//! root (see [`crate::paths::data_root`]).
 
 use std::path::PathBuf;
 
 const CDDIS_HOST: &str = "gdc.cddis.eosdis.nasa.gov";
 
-/// Returns the directory used to store RINEX navigation files (`../Rinex_files`),
-/// creating it if it does not already exist.
-///
-/// # Errors
-///
-/// Returns a human-readable [`String`] if the directory cannot be created.
-pub fn rinex_dir() -> Result<PathBuf, String> {
-    let dir = std::env::current_dir()
-        .map_err(|e| format!("Cannot determine working directory: {e}"))?
-        .join("Rinex_files");
-    if !dir.exists() {
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("Cannot create '{}': {e}", dir.display()))?;
-        log::info!("Created RINEX directory: {}", dir.display());
-    }
-    Ok(dir)
-}
+/// Re-exported so `crate::rinex::rinex_dir()` keeps naming the RINEX store; the
+/// directory itself hangs off the shared data root in [`crate::paths`].
+pub use crate::paths::rinex_dir;
 
 /// Returns `(day_of_year, full_year)` for today in UTC.
 ///

@@ -61,9 +61,9 @@ Cross-platform desktop GUI app using [egui](https://github.com/emilk/egui) / [ef
 | `src/simulator/state.rs` | `SimSettings`, `SimState`, `SimStatus` — shared between worker and UI |
 | `src/simulator/worker.rs` | `run()` / `run_static_loop()` — thin wrappers that delegate to `gps_sim::Simulator` |
 | `src/gps_sim/` | GPS L1 C/A baseband signal simulator. Sub-modules: `types`, `coords`, `orbit`, `ionosphere`, `troposphere`, `codegen`, `navmsg`, `rinex`, `signal`, `fifo`, `hackrf`, `channel` (private), `sim` (private). Public entry point: `Simulator::builder()`. See **GPS simulator notes** below. |
-| `src/rinex.rs` | Downloads today's broadcast RINEX nav file from CDDIS via anonymous FTPS |
+| `src/rinex.rs` | Downloads today's broadcast RINEX nav file from CDDIS via anonymous FTPS; re-exports `paths::rinex_dir` |
 | `src/map_plugin.rs` | walkers `Plugin` impls: `ClickCapturePlugin`, `WaypointMarkerPlugin`, `RouteLinePlugin`, `EditableRoutePlugin`, `PolylinePlugin` |
-| `src/paths.rs` | `umf_dir()` / `waypoint_dir()` — create and return well-known working directories |
+| `src/paths.rs` | `data_root()` — resolves the writable application data root once per process; `umf_dir()` / `waypoint_dir()` / `rinex_dir()` create and return directories under it |
 | `src/import.rs` | `load_route_file()` — parses GPX and KML files into `[lat, lon]` sequences |
 | `src/library.rs` | `RouteEntry` type; scans `umf/` for CSV routes and persists metadata to `library.json` |
 
@@ -217,7 +217,8 @@ Page functions live in one module per page and are `pub(crate)`; the actions str
 
 - `MyApp` serialises via serde; eframe restores it on startup via `eframe::get_value`.
 - Fields tagged `#[serde(skip)]` (`status`, `rt`, `result_rx`, `result_tx`) are re-created fresh in `Default::default()`.
-- Waypoints persist in `./waypoint/`; UMF motion files in `./umf/`; downloaded RINEX nav files in `./Rinex_files/`.
+- Waypoints persist in `<data root>/waypoint/`; UMF motion files in `<data root>/umf/`; downloaded RINEX nav files in `<data root>/Rinex_files/`.
+- The **data root** is resolved once per process by `paths::data_root()` and cached in a `OnceLock`. It is the first *writable* candidate of: `$GUI_SDR_GPS_SIM_DATA_DIR` → the current working directory (unless it is a filesystem root or lives under `%SystemRoot%`) → the executable's own directory (skipped inside a macOS `.app` bundle) → `eframe::storage_dir("Gui SDR GPS Sim")`. Writability is probed by creating a real file, because a Windows directory can be listable and still reject writes. Never resolve a data directory against `current_dir()` alone: a launcher that specifies no working directory starts the process in `C:\Windows\system32`, where every directory creation failed with *"Access denied. (os error 5)"*.
 - Route library index is `./umf/library.json` (array of `RouteEntry` with `name`, `distance_m`, `duration_s`, `velocity_kmh`).
 
 **Image assets** in `assets/img/` are embedded at compile time via `egui::include_image!()`. All image macros live in `src/ui/chrome.rs`, so paths use `../../assets/img/`. Adding an `include_image!` elsewhere in `src/ui/` needs the same two-level prefix — the macro resolves relative to its own source file.

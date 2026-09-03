@@ -26,27 +26,28 @@ The goal is a polished, easy-to-use desktop application — not just a command-l
 2. [Hardware requirements](#hardware-requirements)
 3. [Software requirements](#software-requirements)
 4. [Installation](#installation)
-5. [Quick start](#quick-start)
-6. [GPS Simulator](#gps-simulator)
+5. [Where files are stored](#where-files-are-stored)
+6. [Quick start](#quick-start)
+7. [GPS Simulator](#gps-simulator)
    - [Dynamic mode](#dynamic-mode)
    - [Static mode](#static-mode)
    - [Interactive mode](#interactive-mode)
    - [Simulator settings](#simulator-settings)
    - [Constellations](#constellations)
    - [SDR output options](#sdr-output-options)
-7. [Create UMF Route](#create-umf-route)
+8. [Create UMF Route](#create-umf-route)
    - [OpenRouteService API](#openrouteservice-api)
    - [GeoJSON file](#geojson-file)
    - [Draw on map](#draw-on-map)
    - [GPX / KML import](#gpx--kml-import)
-8. [Manage Waypoints](#manage-waypoints)
-9. [Manage UMF Routes](#manage-umf-routes)
-10. [Verifying a capture](#verifying-a-capture)
-11. [GNU Radio flow graphs](#gnu-radio-flow-graphs)
-12. [File layout](#file-layout)
-13. [Building from source](#building-from-source)
-14. [Contributing](#contributing)
-15. [License](#license)
+9. [Manage Waypoints](#manage-waypoints)
+10. [Manage UMF Routes](#manage-umf-routes)
+11. [Verifying a capture](#verifying-a-capture)
+12. [GNU Radio flow graphs](#gnu-radio-flow-graphs)
+13. [File layout](#file-layout)
+14. [Building from source](#building-from-source)
+15. [Contributing](#contributing)
+16. [License](#license)
 
 ---
 
@@ -134,6 +135,32 @@ Rust 1.88 is selected automatically from the `rust-toolchain` file.
 
 ---
 
+## Where files are stored
+
+Routes, waypoints and downloaded RINEX files live in three folders — `umf/`,
+`waypoint/` and `Rinex_files/` — under a single **data directory**. The app
+picks the first of these it can actually write to, and logs the choice at
+start-up (`RUST_LOG=info`):
+
+| Order | Location | Typical case |
+|---|---|---|
+| 1 | `$GUI_SDR_GPS_SIM_DATA_DIR` | Set it yourself to pin the location |
+| 2 | The current working directory | Launched from a terminal, or `cargo run` from the source tree |
+| 3 | The folder holding the executable | Double-clicked from the folder you extracted the release into |
+| 4 | The per-user data folder | Everything else — see below |
+
+The per-user fallback is `%APPDATA%\Gui SDR GPS Sim\data` on Windows,
+`~/.local/share/guisdrgpssim` on Linux and
+`~/Library/Application Support/Gui-SDR-GPS-Sim` on macOS. Every *Browse* dialog
+opens in the right folder regardless of which one was chosen.
+
+The working directory is skipped when it is a filesystem root or sits under the
+Windows directory: a Start-menu shortcut with no working directory set starts the
+process in `C:\Windows\system32`, which is why earlier versions reported
+*"Cannot create 'C:\Windows\system32\Rinex_files': Access denied (os error 5)"*.
+
+---
+
 ## Quick start
 
 1. **Launch the app** and navigate to the **GPS Simulator** page using the left sidebar.
@@ -157,7 +184,7 @@ Simulates a receiver moving along a pre-recorded UMF motion file.
 
 **Steps:**
 
-1. **RINEX navigation file** — click *Browse* to select a `.nav` / `.rnx` broadcast ephemeris file, or click *Download Today's RINEX* to fetch it automatically from [NASA CDDIS](https://cddis.nasa.gov/). Files are saved to `./Rinex_files/`.
+1. **RINEX navigation file** — click *Browse* to select a `.nav` / `.rnx` broadcast ephemeris file, or click *Download Today's RINEX* to fetch it automatically from [NASA CDDIS](https://cddis.nasa.gov/). Files are saved to the `Rinex_files/` folder of the [data directory](#where-files-are-stored).
 
 2. **Select a route** — either:
    - Click a row in the **Route Library** table to auto-fill the path and preview the route on the map, or
@@ -362,7 +389,7 @@ Waypoints are named geographic coordinates that can be quickly selected as the s
 | **Filter** | Type in the search box to filter by name or description |
 | **Sort** | Click any column header; click again to reverse |
 
-Waypoints are saved to `./waypoint/` and persist across sessions.
+Waypoints are saved to the `waypoint/` folder of the [data directory](#where-files-are-stored) and persist across sessions.
 
 ---
 
@@ -548,15 +575,15 @@ gui_sdr_gps_sim/
 │   ├── waypoint.rs          Waypoint persistence
 │   ├── geo.rs               Coordinate maths + CSV writer
 │   ├── import.rs            GPX / KML parser
-│   └── paths.rs             Working directory helpers
+│   └── paths.rs             Data-directory resolution
 ├── gnuradio/                Analysis tools + GNU Radio flow graphs
 │   ├── gps_nav_decode.py    Software receiver: decode a capture, solve a position
 │   ├── gps_acquisition.py   Parallel code-phase acquisition search
 │   └── plot_iq_file.py      Spectrum and IQ-statistics plots
 ├── assets/img/              Embedded UI images
-├── umf/                     Generated route CSVs, GeoJSON, library.json
-├── waypoint/                Saved waypoints
-├── Rinex_files/             Downloaded RINEX navigation files
+├── umf/                     Generated route CSVs, GeoJSON, library.json  (data dir)
+├── waypoint/                Saved waypoints                              (data dir)
+├── Rinex_files/             Downloaded RINEX navigation files            (data dir)
 ├── rust-toolchain           Pins Rust 1.88
 ├── CHANGELOG.md             Release history
 └── check.sh                 Local CI script
