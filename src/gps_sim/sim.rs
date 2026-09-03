@@ -29,7 +29,7 @@ use super::rinex::NavData;
 use super::signal::{COS_TABLE, SIN_TABLE, ant_pattern_linear};
 use super::types::{
     Constellation, Ephemeris, GpsTime, Location, StartTime,
-    consts::{CARR_TO_CODE, HACKRF_BUF_BYTES, LAMBDA_L1, MAX_CHANNELS, STEP_SECS},
+    consts::{HACKRF_BUF_BYTES, MAX_CHANNELS, STEP_SECS},
 };
 use super::{SdrOutput, SimError};
 
@@ -1520,6 +1520,31 @@ fn generate_iq(
 
         let step_start = Instant::now();
 
+        // ── Re-anchor every channel to this step's geometry ───────────────────
+        // Done at the *top* of the step, against this step's receiver position
+        // and GPS time, so the samples that follow are generated from the same
+        // instant the pseudorange describes. `resync` sets the code phase and
+        // bit counters from that pseudorange and derives the Doppler from it,
+        // which is what the C reference's `computeCodePhase()` does once per
+        // 100 ms. Letting the code NCO free-run instead turns the phase into a
+        // rate integral, and every rate error — including the receiver's own
+        // motion, which the analytic rate cannot see — accumulates without
+        // bound and pulls the position solution off the true point.
+        for ch in &mut channels {
+            let eph_slice = match ch.constellation {
+                Constellation::Gps => gps_eph_set,
+                Constellation::BeiDou => bds_eph_set,
+                Constellation::Galileo => gal_eph_set,
+            };
+            if let Some(eph) = eph_slice.get(ch.prn as usize - 1) {
+                if let Some(rho) = super::orbit::compute_range(eph, &nav.iono, grx, pos) {
+                    ch.resync(&rho, grx);
+                    ch.azel = rho.azel;
+                    ch.d = rho.d;
+                }
+            }
+        }
+
         // ── Per-channel gain for this step ────────────────────────────────────
         // Matches the C reference (multi-sdr-gps-sim):
         //   gain[i] = path_loss * ant_gain   (double, ≈ 0.1 – 1.0)
@@ -1627,30 +1652,6 @@ fn generate_iq(
 
         // ── Advance GPS time ──────────────────────────────────────────────────
         grx = grx.add_secs(STEP_SECS);
-
-        // ── Update satellite positions every step ─────────────────────────────
-        for ch in &mut channels {
-            let eph_slice = match ch.constellation {
-                Constellation::Gps => gps_eph_set,
-                Constellation::BeiDou => bds_eph_set,
-                Constellation::Galileo => gal_eph_set,
-            };
-            if let Some(eph) = eph_slice.get(ch.prn as usize - 1) {
-                if let Some(rho) = super::orbit::compute_range(eph, &nav.iono, grx, pos) {
-                    // Update Doppler from the range rate.
-                    let rho_rate = rho.rate;
-                    ch.f_carr = -rho_rate / LAMBDA_L1;
-                    // Code rate = nominal chip rate + Doppler-scaled code correction.
-                    // The carrier-to-code ratio (1540 for GPS L1) maps carrier Doppler
-                    // to code Doppler.  For BeiDou and Galileo the ratio differs slightly
-                    // (B1C: 1540.0, E1: 1540.0 at 1575.42 MHz) but is unity at L1 for
-                    // all three; reuse CARR_TO_CODE as a good approximation.
-                    ch.f_code = ch.chip_rate + ch.f_carr / CARR_TO_CODE;
-                    ch.azel = rho.azel;
-                    ch.d = rho.d;
-                }
-            }
-        }
 
         // ── Prepare the next navigation frame ─────────────────────────────────
         // Built once per frame, as soon as the channel enters its final subframe

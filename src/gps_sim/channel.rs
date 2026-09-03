@@ -17,7 +17,7 @@ use super::navmsg::{self, WORDS_PER_FRAME};
 use super::orbit::{RangeResult, compute_range};
 use super::types::{
     Constellation, Ephemeris, GpsTime, IonoUtc,
-    consts::{CARR_TO_CODE, LAMBDA_L1, SPEED_OF_LIGHT},
+    consts::{CARR_TO_CODE, LAMBDA_L1, SPEED_OF_LIGHT, STEP_SECS},
 };
 
 /// Simulation state for one tracked GNSS satellite.
@@ -106,6 +106,10 @@ pub struct Channel {
 
     /// Which subframe 4/5 almanac page to broadcast next (0–24, cycled each 30 s).
     pub ipage: usize,
+
+    /// Pseudorange at the previous step (metres), for the backward-difference
+    /// rate in [`Self::resync`].
+    prev_range: f64,
 }
 
 impl Channel {
@@ -180,6 +184,12 @@ impl Channel {
             azel: rho.azel,
             d: rho.d,
             ipage: 0,
+            // Seed the backward difference so the *first* `resync` reproduces the
+            // analytic rate instead of zero. Seeding with `rho.range` itself makes
+            // step 0 differ by nothing, and the channel then transmits its opening
+            // 100 ms at zero Doppler — enough to defeat a receiver that acquires on
+            // the first few milliseconds of the signal.
+            prev_range: rho.range - rho.rate * STEP_SECS,
         };
 
         // Align the bit counters to the signal's transmit time first — that
@@ -241,6 +251,61 @@ impl Channel {
         self.refresh_data_bit();
     }
 
+    /// Re-anchor the code phase and bit counters to the current pseudorange.
+    ///
+    /// Called once per 100 ms step, exactly as the C reference's
+    /// `computeCodePhase()` is. Between calls the code NCO free-runs on
+    /// `f_code`, which makes the phase a *rate integral*: every error in that
+    /// rate accumulates without bound, and since each satellite's error differs,
+    /// the pseudoranges drift apart and drag the position solution off the true
+    /// point at metres per second.
+    ///
+    /// Re-anchoring bounds that to one step. It also covers what the rate cannot
+    /// express at all: `RangeResult::rate` is the satellite's velocity projected
+    /// on the line of sight and knows nothing about the *receiver's* motion, so
+    /// on a moving route the code phase would otherwise drift by the receiver's
+    /// own along-line-of-sight speed.
+    pub fn resync(&mut self, rho: &RangeResult, grx: GpsTime) {
+        // Pseudorange rate as a backward difference, as the C reference forms it.
+        // Differencing the *pseudorange* rather than using the analytic
+        // satellite-velocity projection picks up everything that projection
+        // omits — the receiver's own motion above all, but also the ionospheric
+        // and satellite-clock rates — with no extra state to keep in step.
+        let rate = (rho.range - self.prev_range) / STEP_SECS;
+        self.prev_range = rho.range;
+        self.f_carr = -rate / LAMBDA_L1;
+        self.f_code = self.chip_rate + self.f_carr / CARR_TO_CODE;
+
+        let t_tx = grx.sec - rho.range / SPEED_OF_LIGHT;
+        let target = navmsg::frame_start(GpsTime {
+            week: grx.week,
+            sec: t_tx,
+        });
+
+        // Walk the frame buffer forward if the transmit time has crossed a
+        // frame boundary, reusing the same swap the bit counter performs so the
+        // parity chain carries over intact.
+        while target.sub(self.g0) >= navmsg::FRAME_SECS - 1e-6 {
+            if self.g0_next.is_none() {
+                self.build_next_frame();
+            }
+            let Some(g) = self.g0_next.take() else { break };
+            self.dwrd = self.dwrd_next;
+            self.last_word = self.last_word_next;
+            self.g0 = g;
+            self.ipage = (self.ipage + 1) % 25;
+        }
+
+        // A transmit time behind the loaded frame would mean stepping backwards
+        // through the message; leave the channel where it is and let it catch up.
+        if t_tx < self.g0.sec {
+            return;
+        }
+
+        self.set_counters(t_tx);
+        self.refresh_data_bit();
+    }
+
     /// Build the next 30-second frame once the channel enters its final subframe.
     ///
     /// Doing this a subframe early means the swap in [`Self::advance_nav_bit`] is
@@ -290,8 +355,14 @@ impl Channel {
             sec: t_tx,
         });
 
+        self.set_counters(t_tx);
+    }
+
+    /// Position the code phase and bit counters at transmit time `t_tx`, which
+    /// must lie inside the frame beginning at [`Self::g0`].
+    fn set_counters(&mut self, t_tx: f64) {
         // Elapsed time into the frame — always within [0, 30 000) ms.
-        let ms = (t_tx - self.g0.sec) * 1000.0;
+        let ms = ((t_tx - self.g0.sec) * 1000.0).max(0.0);
         let ims = ms as usize;
 
         // Sub-millisecond fractional code phase (chips).
