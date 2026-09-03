@@ -389,3 +389,70 @@ python gnuradio/gps_acquisition.py --file gnuradio/gps_signal_fixed.iq        --
 # 3b — over the air; the wide window is required for the TX/RX clock offset
 python gnuradio/gps_acquisition.py --file rx_capture.iq --samp-rate 3000000        --doppler-range 40000 --doppler-step 500        --save-plot gnuradio/acq_rx_corrected.png
 ```
+
+---
+
+## Test 5 — Position fix, end to end (2026-09-03)
+
+Everything above tests the *signal*. None of it can tell you whether a receiver
+will produce a **position**, because everything that decides position lives in
+the 50 bps navigation data and in the code-phase-to-pseudorange relationship.
+Test 3 acquired 14 / 14 satellites at a time when no receiver on earth could
+have fixed from the signal.
+
+**Tool:** `gnuradio/gps_nav_decode.py` — acquire, track, decode the navigation
+message, form pseudoranges, solve by least squares.
+
+### 5a — Static position, generated capture
+
+75 s at Amsterdam Centraal (52.3791 N, 4.9003 E, +5 m), solved once per second.
+
+| Metric | Before the 0.2.0 fixes | After |
+|---|---|---|
+| Position scatter, East / North / Up | 28.7 / 3.2 / 38.4 m | **0.7 / 0.4 / 0.8 m** |
+| Horizontal drift | 98.5 m over 48 s | **1.3 m over 31 s** |
+| Per-satellite pseudorange drift | 2.98 m/s mean | **0.59 m/s** |
+| Residual rms | 85 m, growing to 143 m | **34.9 m, flat** |
+
+The residual rms that remains is the ionospheric and tropospheric delay the
+simulator adds and this tool does not correct. It is a constant offset, not
+wander — a real receiver removes most of it with the broadcast Klobuchar
+parameters.
+
+### 5b — Moving route
+
+750 waypoints, due east at 15 m/s (1125 m of travel).
+
+| Metric | Result |
+|---|---|
+| Fitted speed | 15.03 m/s (true 15.00) |
+| Along-track misfit | 0.26 m rms, 0.57 m max |
+| Cross-track spread | 0.81 m rms, 3.29 m total |
+
+### 5c — Live over the air
+
+Transmitted live from the app on HackRF `334c64dc…` at 47 dB TX VGA, captured
+60 s on HackRF `708061dc…`, decoded with `--dopp-max 40000` for the ~21 kHz
+offset between the two crystals.
+
+```
+Tracking 12 satellites at GPS week 2433 sec 594567.1
+== position fix from 10 satellites ==
+  52.380022 N  4.900463 E
+```
+
+Against a simulated 52.3791 N / 4.9003 E. Several satellites tracked at bit-sync
+purity 1.00 across 52 s with clean parity throughout — a single dropped USB
+buffer would have broken both.
+
+### 5d — Real receiver
+
+A mobile phone acquires and reports a position approximately **10 m** from the
+simulated point.
+
+> **Note on the measuring tool.** `gps_nav_decode.py` originally reported
+> code-epoch positions as whole sample indices. At 3 MSPS one sample is 100 m of
+> range, so that put ~40 m of quantisation noise into every pseudorange and hid
+> the entire result — the same scatter appeared before and after a fix that had
+> removed almost all of the real wander. It now carries the fractional code
+> phase. Check the instrument before trusting the measurement.
