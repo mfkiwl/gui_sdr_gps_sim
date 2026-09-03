@@ -525,7 +525,7 @@ impl Default for MyApp {
             sim_motion_path: None,
             sim_rinex_dialog: None,
             sim_motion_dialog: None,
-            sim_txvga_gain: 20,
+            sim_txvga_gain: 47,
             sim_amp_enable: false,
             sim_frequency: crate::simulator::GPS_SAMPLE_RATE_HZ,
             sim_start_time: String::new(),
